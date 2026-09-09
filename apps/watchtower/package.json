@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "heartbeat": "node src/heartbeat.js",
     "test": "node --test"
   },
   "dependencies": {
