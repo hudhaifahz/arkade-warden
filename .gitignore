@@ -1,0 +1,24 @@
+node_modules/
+dist/
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Runtime state and money-bearing deployment data must never be committed.
+secrets/
+data/
+contracts/
+bindings/
+sessions/
+recovery-sessions/
+rollover-sessions/
+*.log
+*.sqlite*
+*.db
+activation-gates.json
+
+# Local infrastructure and provider state.
+.wrangler/
+.railway/
+docker-compose.override.yml

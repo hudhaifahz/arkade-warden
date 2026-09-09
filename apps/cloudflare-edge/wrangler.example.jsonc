@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "arkade-warden-home",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-29",
+  "vpc_services": [
+    {
+      "binding": "ARKADE_ORIGIN",
+      "service_id": "REPLACE_WITH_YOUR_VPC_SERVICE_ID"
+    }
+  ],
+  "observability": { "enabled": true }
+}
