@@ -26,5 +26,6 @@ or operator passwords. It cannot renew, release, refund, or redirect funds.
 
 `/healthz` reports process liveness. `/status` reports the last watch result.
 In heartbeat mode, run `npm run heartbeat` on the private node with
-`ARKADE_URL`, `WATCH_ENTRIES_JSON`, `INGEST_URL`, and the same `INGEST_TOKEN`.
+`ARKADE_URL`, `INGEST_URL`, and the same `INGEST_TOKEN`. Set `ESCROW_ROOT` to
+discover funded contracts automatically, or provide `WATCH_ENTRIES_JSON`.
 Do not put confidential customer or contract metadata in watch labels.

@@ -174,7 +174,7 @@ const server = createServer(async (request, response) => {
     if (url.pathname === "/ingest" && request.method === "POST" && mode === "heartbeat") {
       if (!tokenMatches(bearer(request), ingestToken)) return respondJson(response, 401, { error: "Unauthorized" });
       const body = await readJson(request);
-      if (!Array.isArray(body.entries) || body.entries.length === 0) throw new Error("Heartbeat requires entries");
+      if (!Array.isArray(body.entries)) throw new Error("Heartbeat entries must be an array");
       for (const entry of body.entries) {
         if (!entry.id || !entry.contractId || !entry.finalAt || !Number.isSafeInteger(entry.totalSats) || !Number.isSafeInteger(entry.recoverableSats)) {
           throw new Error("Heartbeat entry is invalid");
