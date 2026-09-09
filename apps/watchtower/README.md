@@ -2,9 +2,9 @@
 
 This is a remote, watch-only companion for long-lived Arkade escrow contracts.
 It can query a public Arkade indexer directly, or accept a scoped outbound
-heartbeat from a private home node. It raises a webhook alert when renewal is
-due, the home service is offline, value changes unexpectedly, or expiry
-recovery is required.
+heartbeat from a private home node. It raises a private Nostr message or
+webhook alert when renewal is due, the home service is offline, value changes
+unexpectedly, or expiry recovery is required.
 
 It must never receive wallet seeds, signing keys, admin credentials, macaroons,
 or operator passwords. It cannot renew, release, refund, or redirect funds.
@@ -17,6 +17,11 @@ or operator passwords. It cannot renew, release, refund, or redirect funds.
   `expectedValueSats`, and optional `healthUrl`.
 - `ALERT_WEBHOOK_URL`: optional HTTPS webhook for phone notifications.
 - `ALERT_WEBHOOK_BEARER`: optional webhook credential.
+- `NOSTR_RECIPIENT_NPUB`: recipient npub for private NIP-17 messages.
+- `NOSTR_PRIVATE_KEY`: dedicated watchtower-bot private key in 64-character hex.
+  Generate a new key for this service; never use a personal Nostr key.
+- `NOSTR_RELAYS`: comma-separated NIP-17 inbox relays from the recipient's
+  kind `10050` event.
 - `INGEST_TOKEN`: required in heartbeat mode; use at least 32 random characters.
 - `STATUS_TOKEN`: optional bearer token protecting `/status`.
 - `STATE_PATH`: optional persisted heartbeat file, such as `/data/state.json`.

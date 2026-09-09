@@ -36,15 +36,15 @@ from the mobile wallet at all times.
 
 ## Watchtower boundary
 
-The future remote watchtower is watch-only. It receives contract ID, public
-script/address, final date, expected value, public outpoint, and alert routing.
-It receives no wallet seed, renewal key, buyer key, seller key, macaroon, or
-operator password.
+The remote watchtower is watch-only. The private Mac queries the Arkade indexer
+and sends a five-minute heartbeat containing an opaque contract identifier,
+totals, expiry, and final date. Railway receives no wallet seed, renewal key,
+buyer key, seller key, script, address, macaroon, or operator password.
 
-It checks the public Arkade indexer and the Frontier Crown health endpoint every
-five minutes. It alerts on an offline Mac, a missed renewal, destination/value
-drift, a fee-policy breach, or entry into the 24-hour critical window. It cannot
-renew, release, refund, or redirect funds.
+It alerts through a NIP-17 encrypted direct message from a dedicated bot key on
+an offline Mac, a missed renewal, destination/value drift, a fee-policy breach,
+or entry into the 24-hour critical window. It cannot renew, release, refund, or
+redirect funds.
 
 ## Test gates
 
@@ -54,5 +54,6 @@ renew, release, refund, or redirect funds.
 - Prove that changed destination, amount, parties, fee, and final date are rejected.
 - Stop the local renewal service and prove the remote watchtower raises a phone
   fallback alert.
+- Deliver a harmless NIP-17 test message to the owner's phone.
 - Complete a phone-signed fallback rollover and verify the exact successor.
 - Only then enable bounded renewal by default for new long escrows.

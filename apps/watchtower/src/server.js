@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { RestIndexerProvider } from "@arkade-os/sdk";
+import { createNostrNotifier, formatWatchtowerAlert } from "./nostr-alert.js";
 import { alertFingerprint, classifyEntry } from "./policy.js";
 
 const port = Number(process.env.PORT ?? "3000");
@@ -16,6 +17,9 @@ const statusToken = process.env.STATUS_TOKEN;
 const statePath = process.env.STATE_PATH;
 const alertWebhookUrl = process.env.ALERT_WEBHOOK_URL;
 const alertWebhookBearer = process.env.ALERT_WEBHOOK_BEARER;
+const nostrRecipient = process.env.NOSTR_RECIPIENT_NPUB;
+const nostrPrivateKey = process.env.NOSTR_PRIVATE_KEY;
+const nostrRelays = process.env.NOSTR_RELAYS;
 const mode = arkadeUrl ? "direct" : "heartbeat";
 
 if (!Array.isArray(directEntries)) throw new Error("WATCH_ENTRIES_JSON must be an array");
@@ -29,6 +33,9 @@ for (const entry of directEntries) {
 }
 
 const indexer = arkadeUrl ? new RestIndexerProvider(arkadeUrl) : undefined;
+const nostrNotifier = nostrRecipient || nostrPrivateKey || nostrRelays
+  ? createNostrNotifier({ recipient: nostrRecipient, privateKey: nostrPrivateKey, relays: nostrRelays })
+  : undefined;
 const alerts = new Map();
 const loadHeartbeat = () => {
   if (!statePath || !existsSync(statePath)) return undefined;
@@ -86,32 +93,41 @@ const checkMac = async (healthUrl) => {
 };
 
 const notify = async (report, checkedAt) => {
-  if (!alertWebhookUrl || report.findings.length === 0) return;
+  if (report.findings.length === 0 || (!alertWebhookUrl && !nostrNotifier)) return;
   const fingerprint = alertFingerprint(report);
   const previous = alerts.get(report.id);
   if (previous?.fingerprint === fingerprint && Date.now() - previous.sentAt < alertCooldownMs) return;
-  const headers = { "content-type": "application/json" };
-  if (alertWebhookBearer) headers.authorization = `Bearer ${alertWebhookBearer}`;
-  const response = await fetch(alertWebhookUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      source: "frontier-crown-arkade-watchtower",
-      checkedAt,
-      report: {
-        id: report.id,
-        contractId: report.contractId,
-        status: report.status,
-        totalSats: report.totalSats,
-        recoverableSats: report.recoverableSats,
-        earliestExpiry: report.earliestExpiry,
-        finalAt: report.finalAt,
-        findings: report.findings,
-      },
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!response.ok) throw new Error(`Alert webhook returned ${response.status}`);
+  const deliveries = [];
+  if (alertWebhookUrl) {
+    const headers = { "content-type": "application/json" };
+    if (alertWebhookBearer) headers.authorization = `Bearer ${alertWebhookBearer}`;
+    deliveries.push(fetch(alertWebhookUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        source: "frontier-crown-arkade-watchtower",
+        checkedAt,
+        report: {
+          id: report.id,
+          contractId: report.contractId,
+          status: report.status,
+          totalSats: report.totalSats,
+          recoverableSats: report.recoverableSats,
+          earliestExpiry: report.earliestExpiry,
+          finalAt: report.finalAt,
+          findings: report.findings,
+        },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    }).then((response) => {
+      if (!response.ok) throw new Error(`Alert webhook returned ${response.status}`);
+    }));
+  }
+  if (nostrNotifier) deliveries.push(nostrNotifier.send(formatWatchtowerAlert(report, checkedAt)));
+  const results = await Promise.allSettled(deliveries);
+  if (results.every(({ status }) => status === "rejected")) {
+    throw new AggregateError(results.map(({ reason }) => reason), "Every alert channel failed");
+  }
   alerts.set(report.id, { fingerprint, sentAt: Date.now() });
 };
 
