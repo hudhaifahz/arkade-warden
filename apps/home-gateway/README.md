@@ -17,6 +17,10 @@ read-only owner console through one authenticated origin.
   routes; every transaction signature still happens in the bound mobile wallet
 - seven-day and longer creation remains server-gated until the indexed funded
   rollover and expiry-recovery proofs both pass
+- the hardened alpha route lets the bound phone approve one fee-, count-,
+  destination-, party-, and final-date-bounded renewal mandate; the local
+  supervisor then creates only exact stock Arkade intents for newly indexed
+  VTXOs
 
 Provide `OWNER_CONSOLE_TOKEN` at runtime from macOS Keychain or another local
 secret store. Also set `ESCROW_DIRECTORY`; optional origin variables are listed
