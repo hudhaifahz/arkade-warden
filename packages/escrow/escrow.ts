@@ -145,12 +145,54 @@ type ManagedTimeContractRecord = {
   };
 };
 
+type HardenedTimeContractRecord = {
+  schemaVersion: 6;
+  scriptVersion: 4;
+  exitDelaySeconds: number;
+  contractId: string;
+  createdAt: string;
+  label: string;
+  durationLabel: string;
+  expectedAmountSats: number;
+  serviceUrl: string;
+  network: "bitcoin";
+  serverPubkey: string;
+  buyerPubkey: string;
+  buyerControl: "mobile-wallet";
+  buyerArkadeAddress: string;
+  sellerPubkey: string;
+  arbiterPubkey: string;
+  refundLockType: "time";
+  refundAt: number;
+  escrowAddress: string;
+  escrowScript: string;
+  lifecycle: "open";
+  rolloverRequired: true;
+  rolloverPolicy: {
+    mode: "bounded-renewal-mandate";
+    warningThresholdSeconds: number;
+    automaticExecution: true;
+    preserveContractScript: true;
+  };
+  hardenedRenewal: {
+    mandateId: string;
+    mandatePath: string;
+    maxRenewals: number;
+    finalAt: string;
+    renewalPubkeys: string[];
+    delegatePubkeys: string[];
+    state: "approved-awaiting-funding" | "active" | "completed" | "manual-recovery-required";
+    activationTest?: boolean;
+  };
+};
+
 type ContractRecord =
   | LegacyTimeContractRecord
   | HeightContractRecord
   | MobileHeightContractRecord
   | MobileTimeContractRecord
-  | ManagedTimeContractRecord;
+  | ManagedTimeContractRecord
+  | HardenedTimeContractRecord;
 
 type BuyerBinding = {
   schemaVersion: 1;
@@ -399,17 +441,17 @@ const contractEntryById = (contractId?: string) => {
 
 const isTimeContract = (
   record: ContractRecord,
-): record is LegacyTimeContractRecord | MobileTimeContractRecord | ManagedTimeContractRecord =>
-  record.schemaVersion === 1 || record.schemaVersion === 4 || record.schemaVersion === 5;
+): record is LegacyTimeContractRecord | MobileTimeContractRecord | ManagedTimeContractRecord | HardenedTimeContractRecord =>
+  record.schemaVersion === 1 || record.schemaVersion === 4 || record.schemaVersion === 5 || record.schemaVersion === 6;
 
 const isMobileContract = (
   record: ContractRecord,
-): record is MobileHeightContractRecord | MobileTimeContractRecord | ManagedTimeContractRecord =>
-  record.schemaVersion === 3 || record.schemaVersion === 4 || record.schemaVersion === 5;
+): record is MobileHeightContractRecord | MobileTimeContractRecord | ManagedTimeContractRecord | HardenedTimeContractRecord =>
+  record.schemaVersion === 3 || record.schemaVersion === 4 || record.schemaVersion === 5 || record.schemaVersion === 6;
 
 const isStockCompatibleContract = (record: ContractRecord) =>
-  (record.schemaVersion === 4 || record.schemaVersion === 5) &&
-  (record.scriptVersion === 2 || record.scriptVersion === 3) &&
+  (record.schemaVersion === 4 || record.schemaVersion === 5 || record.schemaVersion === 6) &&
+  (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4) &&
   Number.isInteger(record.exitDelaySeconds) &&
   record.exitDelaySeconds! >= Number(info.unilateralExitDelay);
 
@@ -418,7 +460,9 @@ const buildContract = (
   refundLocktime: number,
   delegatePubkeyHex?: string,
   exitDelaySeconds?: number,
-  scriptVersion: 2 | 3 = 2,
+  scriptVersion: 2 | 3 | 4 = 2,
+  renewalPubkeyHexes?: string[],
+  delegatePubkeyHexes?: string[],
 ) => {
   const built = buildWardenScript({
     buyerPubkey,
@@ -427,9 +471,15 @@ const buildContract = (
     serverPubkey,
     refundAt: refundLocktime,
     delegatePubkey: delegatePubkeyHex ? hex.decode(delegatePubkeyHex) : undefined,
+    delegatePubkeys: delegatePubkeyHexes?.map(hex.decode),
+    renewalPubkeys: renewalPubkeyHexes?.map(hex.decode),
     exitDelaySeconds,
     delegateApproval:
-      scriptVersion === 3 ? "buyer-with-seller-authorization" : "buyer-and-seller",
+      scriptVersion === 4
+        ? "bounded-renewal-key"
+        : scriptVersion === 3
+          ? "buyer-with-seller-authorization"
+          : "buyer-and-seller",
   });
   return {
     collaborativePath: built.collaborativePath,
@@ -453,9 +503,11 @@ const validateContract = (record: ContractRecord) => {
   }
   const refundLocktime = isTimeContract(record) ? record.refundAt : record.refundBlockHeight;
   const delegatePubkey = record.schemaVersion === 5 ? record.rolloverPolicy.delegatePubkey : undefined;
+  const renewalPubkeys = record.schemaVersion === 6 ? record.hardenedRenewal.renewalPubkeys : undefined;
+  const delegatePubkeys = record.schemaVersion === 6 ? record.hardenedRenewal.delegatePubkeys : undefined;
   const exitDelaySeconds =
-    (record.schemaVersion === 4 || record.schemaVersion === 5) &&
-    (record.scriptVersion === 2 || record.scriptVersion === 3)
+    (record.schemaVersion === 4 || record.schemaVersion === 5 || record.schemaVersion === 6) &&
+    (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4)
     ? record.exitDelaySeconds
     : undefined;
   const built = buildContract(
@@ -463,7 +515,9 @@ const validateContract = (record: ContractRecord) => {
     refundLocktime,
     delegatePubkey,
     exitDelaySeconds,
-    record.schemaVersion === 4 || record.schemaVersion === 5 ? record.scriptVersion ?? 2 : 2,
+    record.schemaVersion === 4 || record.schemaVersion === 5 || record.schemaVersion === 6 ? record.scriptVersion ?? 2 : 2,
+    renewalPubkeys,
+    delegatePubkeys,
   );
   if (built.escrowAddress !== record.escrowAddress) {
     throw new Error("Stored escrow address failed deterministic re-derivation");
@@ -543,7 +597,7 @@ const expirySummary = (spendable: IndexedVtxo[], recoverable: IndexedVtxo[]) => 
 };
 
 const rolloverFeeQuote = async (
-  record: MobileTimeContractRecord | ManagedTimeContractRecord,
+  record: MobileTimeContractRecord | ManagedTimeContractRecord | HardenedTimeContractRecord,
   vtxo: IndexedVtxo,
 ) => {
   const { escrowScript } = validateContract(record);
@@ -626,7 +680,7 @@ const delegatedRolloverFeeQuote = async (
 };
 
 const recoveryFeeQuote = async (
-  record: MobileTimeContractRecord | ManagedTimeContractRecord,
+  record: MobileTimeContractRecord | ManagedTimeContractRecord | HardenedTimeContractRecord,
   vtxo: IndexedVtxo,
   destinationAddress: string,
 ) => {
@@ -1060,7 +1114,7 @@ const statusFor = async (record: ContractRecord, rotated = false, binding = read
   const activeRecoverySession = pendingRecoverySession(record.contractId);
   const expiry = expirySummary(vtxos, recoverableVtxos);
   const funding = assessFunding(
-    record.schemaVersion === 5 ? record.expectedAmountSats : undefined,
+    record.schemaVersion === 5 || record.schemaVersion === 6 ? record.expectedAmountSats : undefined,
     vtxos.reduce((sum, vtxo) => sum + vtxo.value, 0),
   );
   const refundStatus =
@@ -1078,7 +1132,7 @@ const statusFor = async (record: ContractRecord, rotated = false, binding = read
           estimatedTimeRemainingMinutes: Math.max(0, record.refundBlockHeight - height) * 10,
         };
   const rollover = await (async () => {
-    if (record.schemaVersion !== 4 && record.schemaVersion !== 5) {
+    if (record.schemaVersion !== 4 && record.schemaVersion !== 5 && record.schemaVersion !== 6) {
       return { supported: false, state: "legacy-contract", execution: "disabled" };
     }
     if (!isStockCompatibleContract(record)) {
@@ -1127,6 +1181,19 @@ const statusFor = async (record: ContractRecord, rotated = false, binding = read
   })();
   const automaticRollover = record.schemaVersion === 5
     ? await delegatedRolloverPlanFor(record)
+    : record.schemaVersion === 6
+      ? {
+          supported: true,
+          state: record.hardenedRenewal.state,
+          execution: "bounded-renewal-mandate",
+          automaticExecution: true,
+          mandateId: record.hardenedRenewal.mandateId,
+          maxRenewals: record.hardenedRenewal.maxRenewals,
+          finalAt: record.hardenedRenewal.finalAt,
+          signerCount: record.hardenedRenewal.renewalPubkeys.length,
+          delegateCount: record.hardenedRenewal.delegatePubkeys.length,
+          activationTest: record.hardenedRenewal.activationTest,
+        }
     : {
         supported: false,
         state: "managed-contract-required",
@@ -1139,17 +1206,17 @@ const statusFor = async (record: ContractRecord, rotated = false, binding = read
     network: info.network,
     serviceVersion: info.version,
     escrowAddress: record.escrowAddress,
-    label: record.schemaVersion === 5 ? record.label : undefined,
-    presetId: record.schemaVersion === 5 ? record.presetId : undefined,
-    durationLabel: record.schemaVersion === 5 ? record.durationLabel : undefined,
-    expectedAmountSats: record.schemaVersion === 5 ? record.expectedAmountSats : undefined,
+    label: record.schemaVersion === 5 || record.schemaVersion === 6 ? record.label : undefined,
+    presetId: record.schemaVersion === 5 ? record.presetId : record.schemaVersion === 6 ? "hardened-alpha" : undefined,
+    durationLabel: record.schemaVersion === 5 || record.schemaVersion === 6 ? record.durationLabel : undefined,
+    expectedAmountSats: record.schemaVersion === 5 || record.schemaVersion === 6 ? record.expectedAmountSats : undefined,
     fundingState: funding.state,
     fundedAmountSats: funding.fundedAmountSats,
     remainingAmountSats: "remainingAmountSats" in funding ? funding.remainingAmountSats : undefined,
     overfundedAmountSats: "overfundedAmountSats" in funding ? funding.overfundedAmountSats : undefined,
-    managed: record.schemaVersion === 5,
+    managed: record.schemaVersion === 5 || record.schemaVersion === 6,
     stockCompatible: isStockCompatibleContract(record),
-    rolloverRequired: record.schemaVersion === 5 ? record.rolloverRequired : false,
+    rolloverRequired: record.schemaVersion === 5 || record.schemaVersion === 6 ? record.rolloverRequired : false,
     parties: {
       buyerPubkey: record.buyerPubkey,
       sellerPubkey: record.sellerPubkey,
@@ -1243,7 +1310,7 @@ const rolloverPlanFor = async (record: ContractRecord) => {
     automaticExecution: false,
     requiredApprovals: ["buyer-mobile-wallet", "seller-keychain"],
   };
-  if (record.schemaVersion !== 4 && record.schemaVersion !== 5) {
+  if (record.schemaVersion !== 4 && record.schemaVersion !== 5 && record.schemaVersion !== 6) {
     return { ...common, state: "legacy-contract-not-rollover-enabled" };
   }
   if (!isStockCompatibleContract(record)) {
@@ -1253,7 +1320,7 @@ const rolloverPlanFor = async (record: ContractRecord) => {
   if (recoverableVtxos.length > 0) return { ...common, state: "recover-first" };
   if (vtxos.length === 0) return { ...common, state: "not-funded" };
   const funding = assessFunding(
-    record.schemaVersion === 5 ? record.expectedAmountSats : undefined,
+    record.schemaVersion === 5 || record.schemaVersion === 6 ? record.expectedAmountSats : undefined,
     vtxos.reduce((sum, vtxo) => sum + vtxo.value, 0),
   );
   if (funding.state === "underfunded" || funding.state === "overfunded") {
@@ -1322,7 +1389,7 @@ const recoveryPlanFor = async (record: ContractRecord) => {
     execution: "stock-arkd-recovery-batch",
     automaticExecution: false,
   };
-  if (record.schemaVersion !== 4 && record.schemaVersion !== 5) {
+  if (record.schemaVersion !== 4 && record.schemaVersion !== 5 && record.schemaVersion !== 6) {
     return { ...common, state: "mobile-time-contract-required" };
   }
   if (!isStockCompatibleContract(record)) {
@@ -2180,7 +2247,7 @@ if (command === "prepare-mobile") {
   const totalValue = vtxos.reduce((sum, vtxo) => sum + vtxo.value, 0);
   if (!Number.isSafeInteger(totalValue) || totalValue <= 0) throw new Error("Escrow total is invalid");
   const funding = assessFunding(
-    selectedRecord.schemaVersion === 5 ? selectedRecord.expectedAmountSats : undefined,
+    selectedRecord.schemaVersion === 5 || selectedRecord.schemaVersion === 6 ? selectedRecord.expectedAmountSats : undefined,
     totalValue,
   );
   if (action === "release" && funding.state === "underfunded") {

@@ -28,6 +28,26 @@ import {
   type RolloverAuthorizationTerms,
 } from "./rollover-authorization.js";
 import { boundedRenewalCap, renewalDecision, type RenewalMandate } from "./renewal-policy.js";
+import {
+  renewalMandateDigest,
+  renewalMandateId,
+  verifySignedRenewalMandate,
+  type RenewalMandateTerms,
+  type SignedRenewalMandate,
+} from "./renewal-mandate.js";
+import {
+  deriveRenewalHistory,
+  renewalReceiptDigest,
+  type RenewalJournal,
+  type SignedRenewalReceipt,
+} from "./renewal-journal.js";
+import {
+  authorizeBoundedRenewal,
+  selectRenewalDelegate,
+  selectRenewalSigner,
+  type RenewalProposal,
+} from "./bounded-renewal-signer.js";
+import { assertUnilateralExitBundle, type UnilateralExitBundle } from "./unilateral-exit-bundle.js";
 
 test("duration catalog contains the nine requested unique presets", () => {
   assert.equal(durationPresets.length, 9);
@@ -310,6 +330,41 @@ test("bounded renewal key is isolated from buyer and seller fallback paths", () 
   assert.deepEqual(fallback.params.pubkeys, [buyer, seller, server]);
 });
 
+test("hardened Warden script carries two signer and two delegate routes plus stock exits", () => {
+  const key = (byte: number) => {
+    const privateKey = new Uint8Array(32);
+    privateKey[31] = byte;
+    return schnorr.getPublicKey(privateKey);
+  };
+  const built = buildWardenScript({
+    buyerPubkey: key(1),
+    sellerPubkey: key(2),
+    arbiterPubkey: key(3),
+    serverPubkey: key(4),
+    renewalPubkeys: [key(6), key(7)],
+    delegatePubkeys: [key(8), key(9)],
+    delegateApproval: "bounded-renewal-key",
+    refundAt: 1_800_000_000,
+    exitDelaySeconds: 86_016,
+  });
+  assert.equal(built.delegatePaths.length, 4);
+  assert.equal(built.renewalIntentPaths.length, 2);
+  assert.equal(built.exitPaths.length, 3);
+  assert.equal(built.script.exitPaths().length, 3);
+  const routes = built.delegatePaths.map((path) => {
+    const decoded = decodeTapscript(path);
+    assert.equal(MultisigTapscript.is(decoded), true);
+    if (!MultisigTapscript.is(decoded)) throw new Error("Expected multisig delegate route");
+    return decoded.params.pubkeys.map(hex.encode);
+  });
+  assert.deepEqual(routes, [
+    [hex.encode(key(6)), hex.encode(key(8)), hex.encode(key(4))],
+    [hex.encode(key(7)), hex.encode(key(8)), hex.encode(key(4))],
+    [hex.encode(key(6)), hex.encode(key(9)), hex.encode(key(4))],
+    [hex.encode(key(7)), hex.encode(key(9)), hex.encode(key(4))],
+  ]);
+});
+
 test("seller authorization binds the exact delegated rollover terms", async () => {
   const seller = MnemonicIdentity.fromMnemonic(
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
@@ -477,4 +532,252 @@ test("bounded renewal escalates from automatic attempt to phone fallback", () =>
     ).action,
     "manual-fallback",
   );
+});
+
+const hardenedMandateFixture = () => {
+  const privateKey = (byte: number) => {
+    const key = new Uint8Array(32);
+    key[31] = byte;
+    return key;
+  };
+  const pubkey = (byte: number) => hex.encode(schnorr.getPublicKey(privateKey(byte)));
+  const terms: RenewalMandateTerms = {
+    version: 1,
+    purpose: "frontier-crown-warden-bounded-renewal",
+    network: "bitcoin",
+    contractId: "hardened-contract",
+    escrowAddress: "ark1hardenedescrow",
+    escrowScript: `5120${pubkey(10)}`,
+    buyerPubkey: pubkey(1),
+    sellerPubkey: pubkey(2),
+    arbiterPubkey: pubkey(3),
+    arkServerUrl: "https://ark.frontiercrown.com",
+    arkServerPubkey: pubkey(4),
+    arkServerVersion: "v0.9.16",
+    expectedExitDelaySeconds: 86_016,
+    createdAt: "2026-09-01T00:00:00.000Z",
+    finalAt: "2026-10-01T00:00:00.000Z",
+    triggerBeforeExpirySeconds: 72 * 60 * 60,
+    manualFallbackAfterSeconds: 30 * 60,
+    maxFeePerRolloverSats: 5,
+    maxTotalFeeSats: 20,
+    maxRenewals: 8,
+    renewalSigners: [
+      { pubkey: pubkey(6), priority: 0, role: "primary" },
+      { pubkey: pubkey(7), priority: 1, role: "recovery" },
+    ],
+    delegates: [
+      { url: "https://delegate-1.frontiercrown.com", pubkey: pubkey(8), priority: 0, maxFeeSats: 5 },
+      { url: "https://delegate-2.frontiercrown.com", pubkey: pubkey(9), priority: 1, maxFeeSats: 5 },
+    ],
+    exactSuccessorAddress: true,
+    preserveScript: true,
+    preserveParties: true,
+    requireStockExitLeaves: true,
+  };
+  const digest = renewalMandateDigest(terms);
+  const mandate: SignedRenewalMandate = {
+    mandateId: renewalMandateId(terms),
+    terms,
+    approvals: {
+      buyer: { pubkey: terms.buyerPubkey, signature: hex.encode(schnorr.sign(digest, privateKey(1))) },
+      seller: { pubkey: terms.sellerPubkey, signature: hex.encode(schnorr.sign(digest, privateKey(2))) },
+    },
+  };
+  return { privateKey, pubkey, mandate };
+};
+
+const hardenedProposal = (
+  mandate: SignedRenewalMandate,
+  inputTxid: string,
+  inputValue: number,
+  inputExpiresAt: string,
+  signerPubkey = mandate.terms.renewalSigners[0].pubkey,
+  delegatePubkey = mandate.terms.delegates[0].pubkey,
+): RenewalProposal => ({
+  input: { txid: inputTxid, vout: 0, value: inputValue, expiresAt: inputExpiresAt },
+  successor: {
+    address: mandate.terms.escrowAddress,
+    script: mandate.terms.escrowScript,
+    value: inputValue - 1,
+    refundAt: mandate.terms.finalAt,
+  },
+  quotedFeeSats: 1,
+  signerPubkey,
+  delegatePubkey,
+  arkServerUrl: mandate.terms.arkServerUrl,
+  arkServerPubkey: mandate.terms.arkServerPubkey,
+  arkServerVersion: mandate.terms.arkServerVersion,
+  network: "bitcoin",
+  exitDelaySeconds: mandate.terms.expectedExitDelaySeconds,
+});
+
+test("buyer and seller signatures bind every hardened renewal mandate limit", () => {
+  const { mandate } = hardenedMandateFixture();
+  assert.equal(verifySignedRenewalMandate(mandate), mandate);
+  assert.throws(
+    () => verifySignedRenewalMandate({ ...mandate, terms: { ...mandate.terms, maxRenewals: 9 } }),
+    /identifier changed/,
+  );
+  assert.throws(
+    () => verifySignedRenewalMandate({ ...mandate, terms: { ...mandate.terms, escrowAddress: "ark1attacker" } }),
+    /identifier changed/,
+  );
+});
+
+test("hardened signer authorizes three sequential stock renewals and reconstructs its counter", () => {
+  const { privateKey, mandate } = hardenedMandateFixture();
+  const journal: RenewalJournal = {
+    schemaVersion: 1,
+    mandateId: mandate.mandateId,
+    initialOutpoint: { txid: "11".repeat(32), vout: 0 },
+    receipts: [],
+  };
+  let inputTxid = journal.initialOutpoint.txid;
+  let inputValue = 1_000;
+  const expiries = [
+    "2026-09-05T00:00:00.000Z",
+    "2026-09-09T00:00:00.000Z",
+    "2026-09-13T00:00:00.000Z",
+    "2026-09-17T00:00:00.000Z",
+  ];
+  for (let index = 0; index < 3; index += 1) {
+    const proposal = hardenedProposal(mandate, inputTxid, inputValue, expiries[index]);
+    const authorization = authorizeBoundedRenewal(
+      mandate,
+      journal,
+      proposal,
+      { online: true, indexerOnline: true },
+      new Date(Date.parse(expiries[index]) - 48 * 60 * 60 * 1_000),
+    );
+    assert.equal(authorization.sequence, index + 1);
+    const successorTxid = `${index + 2}`.repeat(64).slice(0, 64);
+    const receiptTerms = {
+      version: 1 as const,
+      mandateId: mandate.mandateId,
+      sequence: authorization.sequence,
+      input: proposal.input,
+      successor: {
+        txid: successorTxid,
+        vout: 0,
+        value: proposal.successor.value,
+        expiresAt: expiries[index + 1],
+        address: proposal.successor.address,
+        script: proposal.successor.script,
+      },
+      feeSats: proposal.quotedFeeSats,
+      signerPubkey: proposal.signerPubkey,
+      delegatePubkey: proposal.delegatePubkey,
+      commitmentTxid: `${index + 5}`.repeat(64).slice(0, 64),
+      completedAt: new Date(Date.parse(expiries[index]) - 47 * 60 * 60 * 1_000).toISOString(),
+    };
+    const receipt: SignedRenewalReceipt = {
+      ...receiptTerms,
+      signature: hex.encode(schnorr.sign(renewalReceiptDigest(receiptTerms), privateKey(6))),
+    };
+    journal.receipts.push(receipt);
+    inputTxid = successorTxid;
+    inputValue -= 1;
+  }
+  assert.deepEqual(deriveRenewalHistory(mandate, journal), {
+    completedRenewals: 3,
+    totalFeesSats: 3,
+    lastSuccessAt: journal.receipts[2].completedAt,
+    currentOutpoint: { txid: inputTxid, vout: 0 },
+  });
+});
+
+test("hardened signer refuses theft, replay, wrong operator, excessive fee, and offline operation", () => {
+  const { mandate } = hardenedMandateFixture();
+  const journal: RenewalJournal = {
+    schemaVersion: 1,
+    mandateId: mandate.mandateId,
+    initialOutpoint: { txid: "11".repeat(32), vout: 0 },
+    receipts: [],
+  };
+  const proposal = hardenedProposal(mandate, journal.initialOutpoint.txid, 1_000, "2026-09-05T00:00:00.000Z");
+  const now = new Date("2026-09-03T00:00:00.000Z");
+  assert.throws(
+    () => authorizeBoundedRenewal(mandate, journal, { ...proposal, successor: { ...proposal.successor, address: "ark1attacker" } }, { online: true, indexerOnline: true }, now),
+    /destination changed/,
+  );
+  assert.throws(
+    () => authorizeBoundedRenewal(mandate, journal, { ...proposal, successor: { ...proposal.successor, value: 900 } }, { online: true, indexerOnline: true }, now),
+    /value conservation failed/,
+  );
+  assert.throws(
+    () => authorizeBoundedRenewal(mandate, journal, { ...proposal, arkServerPubkey: "ff".repeat(32) }, { online: true, indexerOnline: true }, now),
+    /identity or version changed/,
+  );
+  assert.throws(
+    () => authorizeBoundedRenewal(mandate, journal, { ...proposal, quotedFeeSats: 6, successor: { ...proposal.successor, value: 994 } }, { online: true, indexerOnline: true }, now),
+    /per-renewal ceiling/,
+  );
+  assert.throws(
+    () => authorizeBoundedRenewal(mandate, journal, proposal, { online: false, indexerOnline: true }, now),
+    /unilateral-exit recovery path/,
+  );
+  assert.throws(
+    () => authorizeBoundedRenewal(mandate, { ...journal, initialOutpoint: { txid: "22".repeat(32), vout: 0 } }, proposal, { online: true, indexerOnline: true }, now),
+    /stale or replayed/,
+  );
+});
+
+test("hardened redundancy selects recovery signer and backup delegate without changing terms", () => {
+  const { mandate } = hardenedMandateFixture();
+  const primarySigner = mandate.terms.renewalSigners[0];
+  const recoverySigner = mandate.terms.renewalSigners[1];
+  const primaryDelegate = mandate.terms.delegates[0];
+  const backupDelegate = mandate.terms.delegates[1];
+  assert.equal(
+    selectRenewalSigner(mandate, { [primarySigner.pubkey]: false, [recoverySigner.pubkey]: true })?.pubkey,
+    recoverySigner.pubkey,
+  );
+  assert.equal(
+    selectRenewalDelegate(mandate, { [primaryDelegate.pubkey]: false, [backupDelegate.pubkey]: true })?.pubkey,
+    backupDelegate.pubkey,
+  );
+  const journal: RenewalJournal = {
+    schemaVersion: 1,
+    mandateId: mandate.mandateId,
+    initialOutpoint: { txid: "11".repeat(32), vout: 0 },
+    receipts: [],
+  };
+  const proposal = hardenedProposal(
+    mandate,
+    journal.initialOutpoint.txid,
+    1_000,
+    "2026-09-05T00:00:00.000Z",
+    recoverySigner.pubkey,
+    backupDelegate.pubkey,
+  );
+  assert.equal(
+    authorizeBoundedRenewal(mandate, journal, proposal, { online: true, indexerOnline: true }, new Date("2026-09-03T00:00:00Z")).action,
+    "authorize",
+  );
+});
+
+test("operator-outage recovery bundle preserves the current VTXO and all stock exit paths", () => {
+  const { mandate } = hardenedMandateFixture();
+  const bundle: UnilateralExitBundle = {
+    schemaVersion: 1,
+    mandateId: mandate.mandateId,
+    contractId: mandate.terms.contractId,
+    arkServerUrl: mandate.terms.arkServerUrl,
+    arkServerPubkey: mandate.terms.arkServerPubkey,
+    network: "bitcoin",
+    currentVtxo: {
+      txid: "11".repeat(32),
+      vout: 0,
+      value: 1_000,
+      expiresAt: "2026-09-05T00:00:00.000Z",
+      tapTree: "aa",
+      script: mandate.terms.escrowScript,
+    },
+    exitPaths: ["aa", "bb", "cc"],
+    participantKeys: [mandate.terms.buyerPubkey, mandate.terms.sellerPubkey, mandate.terms.arbiterPubkey],
+    updatedAt: "2026-09-03T00:00:00.000Z",
+  };
+  assert.equal(assertUnilateralExitBundle(mandate, bundle), bundle);
+  assert.throws(() => assertUnilateralExitBundle(mandate, { ...bundle, exitPaths: ["aa"] }), /all Warden exit paths/);
 });

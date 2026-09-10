@@ -42,10 +42,13 @@ import {
   verifySellerRolloverAuthorization,
   type RolloverAuthorizationTerms,
 } from "./rollover-authorization.js";
+import { authorizeBoundedRenewal } from "./bounded-renewal-signer.js";
+import { readRenewalJournal } from "./renewal-journal.js";
+import { type SignedRenewalMandate } from "./renewal-mandate.js";
 
 type MobileTimeContractRecord = {
-  schemaVersion: 4 | 5;
-  scriptVersion?: 2 | 3;
+  schemaVersion: 4 | 5 | 6;
+  scriptVersion?: 2 | 3 | 4;
   exitDelaySeconds?: number;
   contractId: string;
   createdAt: string;
@@ -64,6 +67,12 @@ type MobileTimeContractRecord = {
   rolloverPolicy?: {
     delegatePubkey?: string;
   };
+  hardenedRenewal?: {
+    mandateId: string;
+    mandatePath: string;
+    renewalPubkeys: string[];
+    delegatePubkeys: string[];
+  };
 };
 
 type RolloverSession = {
@@ -78,11 +87,14 @@ type RolloverSession = {
   successor: { address: string; value: number; refundAt: string };
   quotedFeeSats: number;
   maxFeeSats: number;
-  execution?: "manual-stock-batch" | "preauthorized-delegated-stock-batch";
+  execution?: "manual-stock-batch" | "preauthorized-delegated-stock-batch" | "bounded-renewal-stock-batch";
   automaticExecution: boolean;
   activationTest?: boolean;
   replacesAuthorizationId?: string;
-  requiredApprovals: ["buyer-mobile-wallet", "seller-keychain"];
+  requiredApprovals: string[];
+  mandatePath?: string;
+  journalPath?: string;
+  renewalSignerPubkey?: string;
   delegate?: {
     url: string;
     pubkey: string;
@@ -121,7 +133,10 @@ type WardenParams = {
   serverPubkey: string;
   refundAt: string;
   delegatePubkey?: string;
-  spendPath?: "collaborative" | "delegate";
+  delegatePubkeys?: string;
+  renewalPubkeys?: string;
+  selectedRenewalPubkey?: string;
+  spendPath?: "collaborative" | "delegate" | "bounded-delegate";
   scriptVersion?: string;
   exitDelaySeconds?: string;
 };
@@ -155,7 +170,7 @@ const updateSession = (patch: Partial<RolloverSession>, event?: string) => {
 
 const account = process.env.USER;
 if (!account) throw new Error("USER is unavailable");
-const keychainMnemonic = (role: "seller" | "arbiter") =>
+const keychainMnemonic = (role: "seller" | "arbiter" | "renewal" | "renewal-recovery") =>
   execFileSync(
     "/usr/bin/security",
     ["find-generic-password", "-a", account, "-s", `frontiercrown.arkade.mainnet.escrow.${role}`, "-w"],
@@ -164,6 +179,8 @@ const keychainMnemonic = (role: "seller" | "arbiter") =>
 
 const seller = MnemonicIdentity.fromMnemonic(keychainMnemonic("seller"), { isMainnet: true });
 const arbiter = MnemonicIdentity.fromMnemonic(keychainMnemonic("arbiter"), { isMainnet: true });
+const renewal = MnemonicIdentity.fromMnemonic(keychainMnemonic("renewal"), { isMainnet: true });
+const renewalRecovery = MnemonicIdentity.fromMnemonic(keychainMnemonic("renewal-recovery"), { isMainnet: true });
 
 const scriptFor = (params: WardenParams) => {
   const built = buildWardenScript({
@@ -173,16 +190,24 @@ const scriptFor = (params: WardenParams) => {
     serverPubkey: hex.decode(params.serverPubkey),
     refundAt: Number(params.refundAt),
     delegatePubkey: params.delegatePubkey ? hex.decode(params.delegatePubkey) : undefined,
+    delegatePubkeys: params.delegatePubkeys?.split(",").filter(Boolean).map(hex.decode),
+    renewalPubkeys: params.renewalPubkeys?.split(",").filter(Boolean).map(hex.decode),
     exitDelaySeconds:
-      params.scriptVersion === "2" || params.scriptVersion === "3"
+      params.scriptVersion === "2" || params.scriptVersion === "3" || params.scriptVersion === "4"
         ? Number(params.exitDelaySeconds)
         : undefined,
     delegateApproval:
-      params.scriptVersion === "3" ? "buyer-with-seller-authorization" : "buyer-and-seller",
+      params.scriptVersion === "4"
+        ? "bounded-renewal-key"
+        : params.scriptVersion === "3"
+          ? "buyer-with-seller-authorization"
+          : "buyer-and-seller",
   });
   return {
     collaborativePath: built.collaborativePath,
     delegatePath: built.delegatePath,
+    delegatePaths: built.delegatePaths,
+    renewalIntentPaths: built.renewalIntentPaths,
     script: built.script,
   };
 };
@@ -209,7 +234,14 @@ const wardenHandler: WardenHandler = {
     return {
       ...(Object.fromEntries(required.map((key) => [key, params[key]])) as WardenParams),
       delegatePubkey: params.delegatePubkey,
-      spendPath: params.spendPath === "delegate" ? "delegate" : "collaborative",
+      delegatePubkeys: params.delegatePubkeys,
+      renewalPubkeys: params.renewalPubkeys,
+      selectedRenewalPubkey: params.selectedRenewalPubkey,
+      spendPath: params.spendPath === "bounded-delegate"
+        ? "bounded-delegate"
+        : params.spendPath === "delegate"
+          ? "delegate"
+          : "collaborative",
       scriptVersion: params.scriptVersion,
       exitDelaySeconds: params.exitDelaySeconds,
     };
@@ -217,8 +249,16 @@ const wardenHandler: WardenHandler = {
   selectPath(script: VtxoScript, contract: Contract, context: PathContext) {
     if (!context.collaborative) return null;
     const params = this.deserializeParams(contract.params);
-    const { collaborativePath, delegatePath } = scriptFor(params);
-    const selected = params.spendPath === "delegate" ? delegatePath : collaborativePath;
+    const { collaborativePath, delegatePath, delegatePaths } = scriptFor(params);
+    let selected = params.spendPath === "delegate" ? delegatePath : collaborativePath;
+    if (params.spendPath === "bounded-delegate") {
+      const renewalKeys = params.renewalPubkeys?.split(",").filter(Boolean) ?? [];
+      const delegateKeys = params.delegatePubkeys?.split(",").filter(Boolean) ?? [];
+      const renewalIndex = renewalKeys.indexOf(params.selectedRenewalPubkey ?? "");
+      const delegateIndex = delegateKeys.indexOf(params.delegatePubkey ?? "");
+      if (renewalIndex < 0 || delegateIndex < 0) throw new Error("Bounded renewal route is not approved");
+      selected = delegatePaths[delegateIndex * renewalKeys.length + renewalIndex];
+    }
     if (!selected) throw new Error("Warden delegate path is unavailable");
     return { leaf: script.findLeaf(hex.encode(selected)) };
   },
@@ -238,7 +278,19 @@ const wardenHandler: WardenHandler = {
   },
   deriveTapscripts(script: VtxoScript, contract: Contract) {
     const params = this.deserializeParams(contract.params);
-    const { collaborativePath, delegatePath } = scriptFor(params);
+    const { collaborativePath, delegatePath, delegatePaths, renewalIntentPaths } = scriptFor(params);
+    if (params.spendPath === "bounded-delegate") {
+      const renewalKeys = params.renewalPubkeys?.split(",").filter(Boolean) ?? [];
+      const delegateKeys = params.delegatePubkeys?.split(",").filter(Boolean) ?? [];
+      const renewalIndex = renewalKeys.indexOf(params.selectedRenewalPubkey ?? "");
+      const delegateIndex = delegateKeys.indexOf(params.delegatePubkey ?? "");
+      if (renewalIndex < 0 || delegateIndex < 0) throw new Error("Bounded renewal route is not approved");
+      return {
+        forfeitTapLeafScript: script.findLeaf(hex.encode(delegatePaths[delegateIndex * renewalKeys.length + renewalIndex])),
+        intentTapLeafScript: script.findLeaf(hex.encode(renewalIntentPaths[renewalIndex])),
+        tapTree: script.encode(),
+      };
+    }
     if (params.spendPath === "delegate") {
       if (!delegatePath) throw new Error("Warden delegate path is unavailable");
       return {
@@ -399,7 +451,7 @@ const run = async () => {
   if (dirname(session.contractPath) !== resolve(escrowRoot, "contracts")) throw new Error("Invalid rollover contract path");
   if (basename(session.contractPath) === "active.json") throw new Error("Rollover must reference an immutable contract record");
   const record = readJson<MobileTimeContractRecord>(session.contractPath);
-  if ((record.schemaVersion !== 4 && record.schemaVersion !== 5) || record.contractId !== session.contractId) {
+  if ((record.schemaVersion !== 4 && record.schemaVersion !== 5 && record.schemaVersion !== 6) || record.contractId !== session.contractId) {
     throw new Error("Rollover contract changed");
   }
   if (record.serviceUrl !== serviceUrl || record.network !== "bitcoin") throw new Error("Rollover network mismatch");
@@ -413,7 +465,7 @@ const run = async () => {
   const info = await arkProvider.getInfo();
   if (info.version !== "v0.9.16" || info.network !== "bitcoin") throw new Error("Rollover requires reviewed stock arkd v0.9.16");
   if (
-    (record.scriptVersion !== 2 && record.scriptVersion !== 3) ||
+    (record.scriptVersion !== 2 && record.scriptVersion !== 3 && record.scriptVersion !== 4) ||
     record.exitDelaySeconds !== Number(info.unilateralExitDelay)
   ) {
     throw new Error("Rollover requires a stock-compatible Warden VTXO with the current exit delay");
@@ -426,14 +478,29 @@ const run = async () => {
     throw new Error("Rollover signer identities do not match the contract");
   }
   const delegated = session.execution === "preauthorized-delegated-stock-batch";
+  const bounded = session.execution === "bounded-renewal-stock-batch";
+  let renewalIdentity: MnemonicIdentity | undefined;
+  if (bounded) {
+    const primary = hex.encode(await renewal.xOnlyPublicKey());
+    const recovery = hex.encode(await renewalRecovery.xOnlyPublicKey());
+    renewalIdentity = session.renewalSignerPubkey === primary
+      ? renewal
+      : session.renewalSignerPubkey === recovery
+        ? renewalRecovery
+        : undefined;
+    if (!renewalIdentity) throw new Error("Bounded renewal signer is not available in Keychain");
+  }
   const params: WardenParams = {
     buyerPubkey: record.buyerPubkey,
     sellerPubkey: record.sellerPubkey,
     arbiterPubkey: record.arbiterPubkey,
     serverPubkey: record.serverPubkey,
     refundAt: String(record.refundAt),
-    delegatePubkey: record.rolloverPolicy?.delegatePubkey,
-    spendPath: delegated ? "delegate" : "collaborative",
+    delegatePubkey: bounded ? session.delegate?.pubkey : record.rolloverPolicy?.delegatePubkey,
+    delegatePubkeys: record.hardenedRenewal?.delegatePubkeys.join(","),
+    renewalPubkeys: record.hardenedRenewal?.renewalPubkeys.join(","),
+    selectedRenewalPubkey: session.renewalSignerPubkey,
+    spendPath: bounded ? "bounded-delegate" : delegated ? "delegate" : "collaborative",
     scriptVersion: String(record.scriptVersion),
     exitDelaySeconds: String(record.exitDelaySeconds),
   };
@@ -446,11 +513,12 @@ const run = async () => {
   if (delegated && record.scriptVersion !== 3) {
     throw new Error("Delegated rollover requires the Fulmine-compatible Warden script");
   }
-  const identity = new MutualRemoteIdentity(
-    hex.decode(record.buyerPubkey),
-    seller,
-    hex.encode(built.collaborativePath),
-  );
+  if (bounded && record.scriptVersion !== 4) throw new Error("Bounded renewal requires Warden script version 4");
+  const identity: Identity = renewalIdentity ?? new MutualRemoteIdentity(
+      hex.decode(record.buyerPubkey),
+      seller,
+      hex.encode(built.collaborativePath),
+    );
   const wallet = await Wallet.create({
     identity,
     arkServerUrl: serviceUrl,
@@ -483,7 +551,7 @@ const run = async () => {
     ) {
       throw new Error("Rollover VTXO changed after approval");
     }
-    if (delegated) {
+    if (delegated || bounded) {
       if (!session.delegate || !params.delegatePubkey) throw new Error("Delegated rollover details are missing");
       if (params.delegatePubkey !== session.delegate.pubkey) throw new Error("Delegate public key changed");
       if (Date.parse(session.delegate.authorizationExpiresAt) <= Date.now()) {
@@ -498,7 +566,7 @@ const run = async () => {
         maxFeeSats: session.maxFeeSats,
         delegate: session.delegate,
       };
-      if (
+      if (delegated && (
         !sellerAuthorization ||
         sellerAuthorization.scheme !== "bip340-sha256" ||
         sellerAuthorization.pubkey !== record.sellerPubkey ||
@@ -507,8 +575,39 @@ const run = async () => {
           sellerAuthorization.pubkey,
           sellerAuthorization.signature,
         )
-      ) {
+      )) {
         throw new Error("Seller rollover authorization is missing or invalid");
+      }
+      if (bounded) {
+        if (!session.mandatePath || !session.journalPath || !session.renewalSignerPubkey) {
+          throw new Error("Bounded renewal policy files are missing");
+        }
+        const mandate = readJson<SignedRenewalMandate>(session.mandatePath);
+        if (record.hardenedRenewal?.mandateId !== mandate.mandateId) throw new Error("Bounded renewal mandate changed");
+        authorizeBoundedRenewal(
+          mandate,
+          readRenewalJournal(session.journalPath),
+          {
+            input: { ...session.input, expiresAt: session.input.expiresAt ?? "" },
+            successor: {
+              address: session.successor.address,
+              script: hex.encode(built.script.pkScript),
+              value: session.successor.value,
+              refundAt: session.successor.refundAt,
+            },
+            quotedFeeSats: session.quotedFeeSats,
+            signerPubkey: session.renewalSignerPubkey,
+            delegatePubkey: session.delegate.pubkey,
+            arkServerUrl: serviceUrl,
+            arkServerPubkey: serverHex,
+            arkServerVersion: info.version,
+            network: "bitcoin",
+            exitDelaySeconds: Number(info.unilateralExitDelay),
+          },
+          { online: true, indexerOnline: true },
+          new Date(),
+          { activationTest: session.activationTest },
+        );
       }
       const provider = new FulmineDelegateProvider(
         session.delegate.url,

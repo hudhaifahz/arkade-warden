@@ -95,6 +95,18 @@ const runEscrow = async (command, payload) => {
   return JSON.parse(stdout);
 };
 
+const runHardenedContract = async (command, payload) => {
+  const args = ["--silent", "run", "hardened-contract", "--", command];
+  if (payload !== undefined) args.push(encodePayload(payload));
+  const { stdout } = await execFileAsync(npmPath, args, {
+    cwd: escrowDirectory,
+    timeout: 120_000,
+    maxBuffer: 2_000_000,
+    env: process.env,
+  });
+  return JSON.parse(stdout);
+};
+
 const escrowErrorMessage = (error) => {
   const stderr = String(error?.stderr ?? error?.message ?? "");
   const match = stderr.match(/Error: ([^\n]+)/);
@@ -216,6 +228,22 @@ const server = createServer(async (request, response) => {
       try {
         const body = JSON.parse((await readBody(request, 16_384)).toString("utf8"));
         return json(response, 201, await runEscrow("create-managed", body));
+      } catch (error) {
+        return json(response, 400, { error: escrowErrorMessage(error) });
+      }
+    }
+    if (url.pathname === "/owner/api/warden/hardened/draft" && request.method === "POST") {
+      try {
+        const body = JSON.parse((await readBody(request, 16_384)).toString("utf8"));
+        return json(response, 201, await runHardenedContract("draft", body));
+      } catch (error) {
+        return json(response, 400, { error: escrowErrorMessage(error) });
+      }
+    }
+    if (url.pathname === "/owner/api/warden/hardened/approve" && request.method === "POST") {
+      try {
+        const body = JSON.parse((await readBody(request, 16_384)).toString("utf8"));
+        return json(response, 201, await runHardenedContract("approve", body));
       } catch (error) {
         return json(response, 400, { error: escrowErrorMessage(error) });
       }
@@ -359,4 +387,5 @@ server.listen(listenPort, listenHost, () => {
 // read-only no-op.
 setInterval(() => {
   runEscrow("ensure-active").catch((error) => console.error("Escrow readiness check failed", escrowErrorMessage(error)));
+  runHardenedContract("supervise").catch((error) => console.error("Hardened renewal check failed", escrowErrorMessage(error)));
 }, 60_000).unref();

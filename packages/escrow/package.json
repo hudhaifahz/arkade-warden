@@ -5,6 +5,8 @@
   "scripts": {
     "provision": "tsx provision-identities.ts",
     "escrow": "tsx escrow.ts",
+    "hardened-contract": "tsx hardened-contract.ts",
+    "renewal-supervisor": "tsx renewal-supervisor.ts",
     "check": "tsc --noEmit",
     "test": "tsx --test catalog.test.ts"
   },

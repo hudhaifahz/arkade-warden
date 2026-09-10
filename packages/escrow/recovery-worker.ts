@@ -35,8 +35,8 @@ import { exactTapscriptSighash } from "./signing.js";
 import { buildWardenScript } from "./warden-script.js";
 
 type MobileTimeContractRecord = {
-  schemaVersion: 4 | 5;
-  scriptVersion?: 2 | 3;
+  schemaVersion: 4 | 5 | 6;
+  scriptVersion?: 2 | 3 | 4;
   exitDelaySeconds?: number;
   contractId: string;
   serviceUrl: string;
@@ -49,6 +49,7 @@ type MobileTimeContractRecord = {
   refundAt: number;
   escrowAddress: string;
   rolloverPolicy?: { delegatePubkey?: string };
+  hardenedRenewal?: { renewalPubkeys: string[]; delegatePubkeys: string[] };
 };
 
 type RecoverySession = {
@@ -85,6 +86,8 @@ type WardenParams = {
   serverPubkey: string;
   refundAt: string;
   delegatePubkey?: string;
+  delegatePubkeys?: string;
+  renewalPubkeys?: string;
   spendPath: "collaborative" | "refund";
   scriptVersion?: string;
   exitDelaySeconds?: string;
@@ -138,12 +141,18 @@ const scriptFor = (params: WardenParams) => {
     serverPubkey: hex.decode(params.serverPubkey),
     refundAt: Number(params.refundAt),
     delegatePubkey: params.delegatePubkey ? hex.decode(params.delegatePubkey) : undefined,
+    delegatePubkeys: params.delegatePubkeys?.split(",").filter(Boolean).map(hex.decode),
+    renewalPubkeys: params.renewalPubkeys?.split(",").filter(Boolean).map(hex.decode),
     exitDelaySeconds:
-      params.scriptVersion === "2" || params.scriptVersion === "3"
+      params.scriptVersion === "2" || params.scriptVersion === "3" || params.scriptVersion === "4"
         ? Number(params.exitDelaySeconds)
         : undefined,
     delegateApproval:
-      params.scriptVersion === "3" ? "buyer-with-seller-authorization" : "buyer-and-seller",
+      params.scriptVersion === "4"
+        ? "bounded-renewal-key"
+        : params.scriptVersion === "3"
+          ? "buyer-with-seller-authorization"
+          : "buyer-and-seller",
   });
   return {
     collaborativePath: built.collaborativePath,
@@ -174,6 +183,8 @@ const wardenHandler: WardenHandler = {
     return {
       ...(Object.fromEntries(required.map((key) => [key, params[key]])) as Omit<WardenParams, "spendPath">),
       delegatePubkey: params.delegatePubkey,
+      delegatePubkeys: params.delegatePubkeys,
+      renewalPubkeys: params.renewalPubkeys,
       spendPath: params.spendPath === "refund" ? "refund" : "collaborative",
       scriptVersion: params.scriptVersion,
       exitDelaySeconds: params.exitDelaySeconds,
@@ -317,7 +328,7 @@ const run = async () => {
   if (dirname(session.contractPath) !== resolve(escrowRoot, "contracts")) throw new Error("Invalid recovery contract path");
   if (basename(session.contractPath) === "active.json") throw new Error("Recovery must reference an immutable contract record");
   const record = readJson<MobileTimeContractRecord>(session.contractPath);
-  if ((record.schemaVersion !== 4 && record.schemaVersion !== 5) || record.contractId !== session.contractId) {
+  if ((record.schemaVersion !== 4 && record.schemaVersion !== 5 && record.schemaVersion !== 6) || record.contractId !== session.contractId) {
     throw new Error("Recovery contract changed");
   }
   if (record.serviceUrl !== serviceUrl || record.network !== "bitcoin") throw new Error("Recovery network mismatch");
@@ -336,7 +347,7 @@ const run = async () => {
     throw new Error("Recovery requires reviewed stock arkd v0.9.16");
   }
   if (
-    (record.scriptVersion !== 2 && record.scriptVersion !== 3) ||
+    (record.scriptVersion !== 2 && record.scriptVersion !== 3 && record.scriptVersion !== 4) ||
     record.exitDelaySeconds !== Number(info.unilateralExitDelay)
   ) {
     throw new Error("Recovery requires a stock-compatible Warden VTXO with the current exit delay");
@@ -355,6 +366,8 @@ const run = async () => {
     serverPubkey: record.serverPubkey,
     refundAt: String(record.refundAt),
     delegatePubkey: record.rolloverPolicy?.delegatePubkey,
+    delegatePubkeys: record.hardenedRenewal?.delegatePubkeys.join(","),
+    renewalPubkeys: record.hardenedRenewal?.renewalPubkeys.join(","),
     spendPath: refundMode ? "refund" : "collaborative",
     scriptVersion: String(record.scriptVersion),
     exitDelaySeconds: String(record.exitDelaySeconds),

@@ -108,6 +108,24 @@ type RecoverySession = {
   error?: string
 }
 
+type HardenedMandateDraft = {
+  sessionId: string
+  digest: string
+  expiresAt: string
+  summary: {
+    network: 'bitcoin'
+    amountSats: number
+    durationSeconds: number
+    finalAt: string
+    maxRenewals: number
+    maxFeePerRolloverSats: number
+    maxTotalFeeSats: number
+    signerCount: number
+    delegateCount: number
+    escrowAddress: string
+  }
+}
+
 type WardenDashboard = {
   currentBlockHeight: number
   binding?: { buyerArkadeAddress: string }
@@ -413,6 +431,49 @@ export default function Warden() {
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create escrow')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const createHardenedAlphaEscrow = async () => {
+    if (!svcWallet) return setError('Wallet is not ready')
+    if (!dashboard?.binding) return setError('Bind this mobile wallet first')
+    if (
+      !window.confirm(
+        'Prepare a fresh 10-day mainnet-alpha escrow for exactly 1,000 sats?\n\nThis creates an address but moves no sats. You will review one bounded mandate covering up to four stock renewals, two renewal signers, two delegates, fixed destination, fixed parties, and a fixed final date.',
+      )
+    )
+      return
+    setBusy('create:hardened-alpha')
+    setError('')
+    setResult('')
+    try {
+      const draft = await requestJson<HardenedMandateDraft>('/owner/api/warden/hardened/draft', {
+        method: 'POST',
+        body: JSON.stringify({ durationSeconds: 10 * 24 * 60 * 60, expectedAmountSats: 1_000 }),
+      })
+      const days = Math.round(draft.summary.durationSeconds / 86_400)
+      if (
+        !window.confirm(
+          `Authorize this bounded renewal mandate?\n\nNetwork: Bitcoin mainnet alpha\nEscrow: 1,000 sats for ${days} days\nFinal date: ${new Date(draft.summary.finalAt).toLocaleString()}\nMaximum renewals: ${draft.summary.maxRenewals}\nMaximum fee each: ${draft.summary.maxFeePerRolloverSats} sats\nMaximum fees total: ${draft.summary.maxTotalFeeSats} sats\nIndependent renewal signers: ${draft.summary.signerCount}\nIndependent delegates: ${draft.summary.delegateCount}\n\nEvery renewal must keep the same address, script, parties, value except the capped fee, and final date. This approval expires in 30 minutes.`,
+        )
+      ) {
+        setResult('Hardened mandate draft was not signed. No escrow was activated and no sats moved.')
+        return
+      }
+      const signature = await svcWallet.identity.signMessage(hex.decode(draft.digest), 'schnorr')
+      const approved = await requestJson<{ contract: { contractId: string; escrowAddress: string } }>(
+        '/owner/api/warden/hardened/approve',
+        {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: draft.sessionId, buyerSignature: hex.encode(signature) }),
+        },
+      )
+      setResult(`Hardened alpha escrow approved. Contract ${approved.contract.contractId}. Fund only after its status appears below.`)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to create hardened alpha escrow')
     } finally {
       setBusy('')
     }
@@ -784,6 +845,23 @@ export default function Warden() {
                     </FlexCol>
                   </div>
                 ))}
+              </FlexCol>
+            </div>
+            <div style={cardStyle}>
+              <FlexCol gap='0.75rem'>
+                <Text bold>Hardened automatic-renewal alpha</Text>
+                <TextSecondary>
+                  Creates one isolated 10-day, 1,000-sat mainnet-alpha escrow. One buyer approval fixes the final date,
+                  address, parties, renewal count, and fee ceilings. Two signer paths and two delegate paths are included,
+                  alongside the three stock unilateral-exit paths. Creating it does not move sats.
+                </TextSecondary>
+                <Button
+                  label='Create hardened 10-day alpha escrow'
+                  variant='secondary'
+                  loading={busy === 'create:hardened-alpha'}
+                  disabled={Boolean(busy) || !dashboard?.binding}
+                  onClick={createHardenedAlphaEscrow}
+                />
               </FlexCol>
             </div>
             <div style={dashboard?.activationGates.automaticLongTerm.enabled ? cardStyle : warningStyle}>

@@ -12,7 +12,9 @@ export type WardenScriptParams = {
   serverPubkey: Uint8Array;
   refundAt: number;
   delegatePubkey?: Uint8Array;
+  delegatePubkeys?: Uint8Array[];
   renewalPubkey?: Uint8Array;
+  renewalPubkeys?: Uint8Array[];
   exitDelaySeconds?: number;
   delegateApproval?: "buyer-and-seller" | "buyer-with-seller-authorization" | "bounded-renewal-key";
 };
@@ -28,22 +30,27 @@ export const buildWardenScript = (params: WardenScriptParams) => {
     pubkeys: [params.buyerPubkey, params.serverPubkey],
     absoluteTimelock: BigInt(params.refundAt),
   }).script;
-  if (params.delegateApproval === "bounded-renewal-key" && !params.renewalPubkey) {
+  const renewalPubkeys = params.renewalPubkeys ?? (params.renewalPubkey ? [params.renewalPubkey] : []);
+  const delegatePubkeys = params.delegatePubkeys ?? (params.delegatePubkey ? [params.delegatePubkey] : []);
+  if (params.delegateApproval === "bounded-renewal-key" && renewalPubkeys.length === 0) {
     throw new Error("Bounded renewal scripts require a dedicated renewal public key");
   }
-  const delegatePath = params.delegatePubkey
-    ? MultisigTapscript.encode({
-        pubkeys:
-          params.delegateApproval === "bounded-renewal-key"
-            ? [params.renewalPubkey!, params.delegatePubkey, params.serverPubkey]
-            : params.delegateApproval === "buyer-with-seller-authorization"
-            ? [params.buyerPubkey, params.delegatePubkey, params.serverPubkey]
-            : [params.buyerPubkey, params.sellerPubkey, params.delegatePubkey, params.serverPubkey],
-      }).script
-    : undefined;
-  const renewalIntentPath = params.renewalPubkey
-    ? MultisigTapscript.encode({ pubkeys: [params.renewalPubkey, params.serverPubkey] }).script
-    : undefined;
+  const delegatePaths = delegatePubkeys.flatMap((delegatePubkey) => {
+    if (params.delegateApproval === "bounded-renewal-key") {
+      return renewalPubkeys.map((renewalPubkey) => MultisigTapscript.encode({
+        pubkeys: [renewalPubkey, delegatePubkey, params.serverPubkey],
+      }).script);
+    }
+    return [MultisigTapscript.encode({
+      pubkeys:
+        params.delegateApproval === "buyer-with-seller-authorization"
+          ? [params.buyerPubkey, delegatePubkey, params.serverPubkey]
+          : [params.buyerPubkey, params.sellerPubkey, delegatePubkey, params.serverPubkey],
+    }).script];
+  });
+  const renewalIntentPaths = renewalPubkeys.map((renewalPubkey) =>
+    MultisigTapscript.encode({ pubkeys: [renewalPubkey, params.serverPubkey] }).script,
+  );
   if (
     params.exitDelaySeconds !== undefined &&
     (!Number.isInteger(params.exitDelaySeconds) || params.exitDelaySeconds < 512)
@@ -66,15 +73,15 @@ export const buildWardenScript = (params: WardenScriptParams) => {
         }).script,
       ]
     : [];
-  const leaves = delegatePath
-    ? [collaborativePath, delegatePath, ...(renewalIntentPath ? [renewalIntentPath] : []), arbiterPath, refundPath, ...exitPaths]
-    : [collaborativePath, arbiterPath, refundPath, ...exitPaths];
+  const leaves = [collaborativePath, ...delegatePaths, ...renewalIntentPaths, arbiterPath, refundPath, ...exitPaths];
   return {
     collaborativePath,
     arbiterPath,
     refundPath,
-    delegatePath,
-    renewalIntentPath,
+    delegatePath: delegatePaths[0],
+    delegatePaths,
+    renewalIntentPath: renewalIntentPaths[0],
+    renewalIntentPaths,
     exitPaths,
     script: new VtxoScript(leaves),
   };

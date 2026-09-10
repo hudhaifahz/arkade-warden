@@ -17,6 +17,7 @@ const services = [
   "frontiercrown.arkade.mainnet.escrow.seller",
   "frontiercrown.arkade.mainnet.escrow.arbiter",
   "frontiercrown.arkade.mainnet.escrow.renewal",
+  "frontiercrown.arkade.mainnet.escrow.renewal-recovery",
 ];
 
 for (const service of services) {
