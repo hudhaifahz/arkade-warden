@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import {
+  ConditionCSVMultisigTapscript,
   CSVMultisigTapscript,
   Intent,
   MnemonicIdentity,
@@ -10,6 +11,7 @@ import {
   decodeTapscript,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
+import { Script } from "@scure/btc-signer";
 import {
   defaultActivationGates,
   durationPresetById,
@@ -313,6 +315,7 @@ test("bounded renewal key is isolated from buyer and seller fallback paths", () 
     delegatePubkey: key(5),
     renewalPubkey: renewal,
     delegateApproval: "bounded-renewal-key",
+    finalBuyerUnilateralExit: true,
     refundAt: 1_800_000_000,
     exitDelaySeconds: 86_016,
   });
@@ -344,13 +347,24 @@ test("hardened Warden script carries two signer and two delegate routes plus sto
     renewalPubkeys: [key(6), key(7)],
     delegatePubkeys: [key(8), key(9)],
     delegateApproval: "bounded-renewal-key",
+    finalBuyerUnilateralExit: true,
     refundAt: 1_800_000_000,
     exitDelaySeconds: 86_016,
   });
   assert.equal(built.delegatePaths.length, 4);
   assert.equal(built.renewalIntentPaths.length, 2);
-  assert.equal(built.exitPaths.length, 3);
-  assert.equal(built.script.exitPaths().length, 3);
+  assert.equal(built.exitPaths.length, 4);
+  assert.equal(built.script.exitPaths().length, 4);
+  assert.ok(built.finalBuyerExitPath);
+  const finalExit = decodeTapscript(built.finalBuyerExitPath!);
+  assert.equal(ConditionCSVMultisigTapscript.is(finalExit), true);
+  if (!ConditionCSVMultisigTapscript.is(finalExit)) throw new Error("Expected conditional CSV buyer exit");
+  assert.equal(finalExit.params.pubkeys.length, 1);
+  assert.deepEqual(finalExit.params.pubkeys[0], key(1));
+  assert.deepEqual(
+    finalExit.params.conditionScript,
+    Script.encode([1_800_000_000, "CHECKLOCKTIMEVERIFY", "DROP", 1]),
+  );
   const routes = built.delegatePaths.map((path) => {
     const decoded = decodeTapscript(path);
     assert.equal(MultisigTapscript.is(decoded), true);
@@ -760,7 +774,7 @@ test("hardened redundancy selects recovery signer and backup delegate without ch
 test("operator-outage recovery bundle preserves the current VTXO and all stock exit paths", () => {
   const { mandate } = hardenedMandateFixture();
   const bundle: UnilateralExitBundle = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     mandateId: mandate.mandateId,
     contractId: mandate.terms.contractId,
     arkServerUrl: mandate.terms.arkServerUrl,
@@ -774,10 +788,15 @@ test("operator-outage recovery bundle preserves the current VTXO and all stock e
       tapTree: "aa",
       script: mandate.terms.escrowScript,
     },
-    exitPaths: ["aa", "bb", "cc"],
+    exitPaths: ["aa", "bb", "cc", "dd"],
+    finalBuyerExitPath: "dd",
     participantKeys: [mandate.terms.buyerPubkey, mandate.terms.sellerPubkey, mandate.terms.arbiterPubkey],
     updatedAt: "2026-09-03T00:00:00.000Z",
   };
   assert.equal(assertUnilateralExitBundle(mandate, bundle), bundle);
   assert.throws(() => assertUnilateralExitBundle(mandate, { ...bundle, exitPaths: ["aa"] }), /all Warden exit paths/);
+  assert.throws(
+    () => assertUnilateralExitBundle(mandate, { ...bundle, finalBuyerExitPath: "ee" }),
+    /buyer-only final recovery path/,
+  );
 });

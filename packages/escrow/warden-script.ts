@@ -1,9 +1,11 @@
 import {
   CLTVMultisigTapscript,
+  ConditionCSVMultisigTapscript,
   CSVMultisigTapscript,
   MultisigTapscript,
   VtxoScript,
 } from "@arkade-os/sdk";
+import { Script } from "@scure/btc-signer";
 
 export type WardenScriptParams = {
   buyerPubkey: Uint8Array;
@@ -16,6 +18,7 @@ export type WardenScriptParams = {
   renewalPubkey?: Uint8Array;
   renewalPubkeys?: Uint8Array[];
   exitDelaySeconds?: number;
+  finalBuyerUnilateralExit?: boolean;
   delegateApproval?: "buyer-and-seller" | "buyer-with-seller-authorization" | "bounded-renewal-key";
 };
 
@@ -57,7 +60,7 @@ export const buildWardenScript = (params: WardenScriptParams) => {
   ) {
     throw new Error("Warden stock-compatible exit delay is invalid");
   }
-  const exitPaths = params.exitDelaySeconds
+  const cooperativeExitPaths = params.exitDelaySeconds
     ? [
         CSVMultisigTapscript.encode({
           pubkeys: [params.buyerPubkey, params.sellerPubkey],
@@ -73,6 +76,21 @@ export const buildWardenScript = (params: WardenScriptParams) => {
         }).script,
       ]
     : [];
+  const finalBuyerExitPath = params.exitDelaySeconds && params.finalBuyerUnilateralExit
+    ? ConditionCSVMultisigTapscript.encode({
+        conditionScript: Script.encode([
+          params.refundAt,
+          "CHECKLOCKTIMEVERIFY",
+          "DROP",
+          1,
+        ]),
+        pubkeys: [params.buyerPubkey],
+        timelock: { value: BigInt(params.exitDelaySeconds), type: "seconds" },
+      }).script
+    : undefined;
+  const exitPaths = finalBuyerExitPath
+    ? [...cooperativeExitPaths, finalBuyerExitPath]
+    : cooperativeExitPaths;
   const leaves = [collaborativePath, ...delegatePaths, ...renewalIntentPaths, arbiterPath, refundPath, ...exitPaths];
   return {
     collaborativePath,
@@ -83,6 +101,7 @@ export const buildWardenScript = (params: WardenScriptParams) => {
     renewalIntentPath: renewalIntentPaths[0],
     renewalIntentPaths,
     exitPaths,
+    finalBuyerExitPath,
     script: new VtxoScript(leaves),
   };
 };

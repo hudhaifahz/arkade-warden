@@ -30,6 +30,12 @@ The signed mandate fixes:
 - exact successor address and script, unchanged parties, and required stock
   exit leaves.
 
+Hardened script version 5 also adds a stock-recognized conditional CSV exit for
+the buyer alone. It can be spent only after both the signed escrow final time
+and Arkade's advertised unilateral-exit delay. This preserves escrow before the
+deadline while removing the operator, seller, arbiter, renewal signer, and
+delegate from the buyer's final recovery path.
+
 Every renewal conserves value exactly: `successor = input - approved fee`.
 There is no general-purpose send capability in the supervisor.
 
@@ -56,17 +62,19 @@ changed destination fails closed.
 - Final escrow date covered by the current VTXO: stop renewing.
 
 The two local Fulmine instances provide process-level delegate redundancy, not
-Mac-level or operator-level high availability. A production deployment still
-needs an off-Mac watchtower, a second operator deployment strategy, and a
-participant-held, tested unilateral-exit package.
+Mac-level or operator-level high availability. The Railway watchtower now
+checks the local heartbeat, supervisor freshness, both delegate identities,
+renewal count, VTXO value/expiry, and recovery-metadata freshness without any
+spending key. A production deployment still needs a second operator deployment
+strategy and a participant-held, tested unilateral-exit package.
 
 ## Mainnet-alpha test
 
 The mobile owner UI can create an isolated 10-day, 1,000-sat contract. Creation
 moves no sats. The buyer reviews and signs the mandate once; the seller approval
 is signed by the configured Keychain identity. The contract includes two
-renewal signer routes, two delegate routes, and the three two-party stock exit
-closures.
+renewal signer routes, two delegate routes, three two-party stock exit closures,
+and one buyer-only final recovery closure.
 
 Do not fund the alpha address until the dashboard shows the approved contract,
 the mandate ID, two signers, two delegates, and the fixed final date. A funded

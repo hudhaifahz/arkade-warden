@@ -48,7 +48,7 @@ import { type SignedRenewalMandate } from "./renewal-mandate.js";
 
 type MobileTimeContractRecord = {
   schemaVersion: 4 | 5 | 6;
-  scriptVersion?: 2 | 3 | 4;
+  scriptVersion?: 2 | 3 | 4 | 5;
   exitDelaySeconds?: number;
   contractId: string;
   createdAt: string;
@@ -193,15 +193,16 @@ const scriptFor = (params: WardenParams) => {
     delegatePubkeys: params.delegatePubkeys?.split(",").filter(Boolean).map(hex.decode),
     renewalPubkeys: params.renewalPubkeys?.split(",").filter(Boolean).map(hex.decode),
     exitDelaySeconds:
-      params.scriptVersion === "2" || params.scriptVersion === "3" || params.scriptVersion === "4"
+      params.scriptVersion === "2" || params.scriptVersion === "3" || params.scriptVersion === "4" || params.scriptVersion === "5"
         ? Number(params.exitDelaySeconds)
         : undefined,
     delegateApproval:
-      params.scriptVersion === "4"
+      params.scriptVersion === "4" || params.scriptVersion === "5"
         ? "bounded-renewal-key"
         : params.scriptVersion === "3"
           ? "buyer-with-seller-authorization"
           : "buyer-and-seller",
+    finalBuyerUnilateralExit: params.scriptVersion === "5",
   });
   return {
     collaborativePath: built.collaborativePath,
@@ -465,7 +466,7 @@ const run = async () => {
   const info = await arkProvider.getInfo();
   if (info.version !== "v0.9.16" || info.network !== "bitcoin") throw new Error("Rollover requires reviewed stock arkd v0.9.16");
   if (
-    (record.scriptVersion !== 2 && record.scriptVersion !== 3 && record.scriptVersion !== 4) ||
+    (record.scriptVersion !== 2 && record.scriptVersion !== 3 && record.scriptVersion !== 4 && record.scriptVersion !== 5) ||
     record.exitDelaySeconds !== Number(info.unilateralExitDelay)
   ) {
     throw new Error("Rollover requires a stock-compatible Warden VTXO with the current exit delay");
@@ -513,7 +514,7 @@ const run = async () => {
   if (delegated && record.scriptVersion !== 3) {
     throw new Error("Delegated rollover requires the Fulmine-compatible Warden script");
   }
-  if (bounded && record.scriptVersion !== 4) throw new Error("Bounded renewal requires Warden script version 4");
+  if (bounded && record.scriptVersion !== 5) throw new Error("Bounded renewal requires Warden script version 5");
   const identity: Identity = renewalIdentity ?? new MutualRemoteIdentity(
       hex.decode(record.buyerPubkey),
       seller,

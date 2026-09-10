@@ -195,6 +195,14 @@ const server = createServer(async (request, response) => {
         if (!entry.id || !entry.contractId || !entry.finalAt || !Number.isSafeInteger(entry.totalSats) || !Number.isSafeInteger(entry.recoverableSats)) {
           throw new Error("Heartbeat entry is invalid");
         }
+        if (entry.renewal && (
+          !entry.renewal.mandateId ||
+          !Number.isSafeInteger(entry.renewal.maxRenewals) ||
+          !Number.isSafeInteger(entry.renewal.completedRenewals) ||
+          !Number.isSafeInteger(entry.renewal.signerCount) ||
+          !Number.isSafeInteger(entry.renewal.delegateCount) ||
+          !Number.isSafeInteger(entry.renewal.delegateOnlineCount)
+        )) throw new Error("Heartbeat renewal status is invalid");
       }
       latestHeartbeat = { receivedAt: new Date().toISOString(), sentAt: body.sentAt, entries: body.entries };
       saveHeartbeat(latestHeartbeat);

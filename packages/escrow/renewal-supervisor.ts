@@ -27,7 +27,7 @@ import { assertUnilateralExitBundle, type UnilateralExitBundle } from "./unilate
 
 type HardenedContract = {
   schemaVersion: 6;
-  scriptVersion: 4;
+  scriptVersion: 5;
   contractId: string;
   serviceUrl: string;
   network: "bitcoin";
@@ -93,6 +93,7 @@ const contractsDirectory = resolve(root, "contracts");
 const sessionsDirectory = resolve(root, "rollover-sessions");
 const journalsDirectory = resolve(root, "renewal-journals");
 const exitBundlesDirectory = resolve(root, "unilateral-exit-bundles");
+const supervisorStatusPath = resolve(root, "renewal-supervisor-status.json");
 const workerPath = resolve(root, "rollover-worker.ts");
 const activationTest = process.env.HARDENED_RENEWAL_ACTIVATION_TEST === "true";
 
@@ -290,6 +291,7 @@ const supervise = async (contractPath: string, contract: HardenedContract) => {
     delegatePubkeys: contract.hardenedRenewal.delegatePubkeys.map(hex.decode),
     delegateApproval: "bounded-renewal-key",
     exitDelaySeconds: contract.exitDelaySeconds,
+    finalBuyerUnilateralExit: true,
   });
   if (
     built.script.address(networks.bitcoin.hrp, serverPubkey).encode() !== contract.escrowAddress ||
@@ -323,7 +325,7 @@ const supervise = async (contractPath: string, contract: HardenedContract) => {
   const input = spendable.find((coin) => outpoint(coin) === outpoint(history.currentOutpoint));
   if (!input || !input.expiresAt) return { contractId: contract.contractId, state: "awaiting-indexed-successor" };
   const exitBundle: UnilateralExitBundle = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     mandateId: mandate.mandateId,
     contractId: contract.contractId,
     arkServerUrl: contract.serviceUrl,
@@ -338,6 +340,7 @@ const supervise = async (contractPath: string, contract: HardenedContract) => {
       script: contract.escrowScript,
     },
     exitPaths: built.exitPaths.map(hex.encode),
+    finalBuyerExitPath: hex.encode(built.finalBuyerExitPath!),
     participantKeys: [contract.buyerPubkey, contract.sellerPubkey, contract.arbiterPubkey],
     updatedAt: new Date().toISOString(),
   };
@@ -428,6 +431,7 @@ const supervise = async (contractPath: string, contract: HardenedContract) => {
   return { contractId: contract.contractId, state: "scheduled", sessionId: session.sessionId, signer: signer.role, delegatePriority: selectedDelegate?.priority };
 };
 
+const checkedAt = new Date().toISOString();
 const results = [];
 for (const name of (existsSync(contractsDirectory) ? readdirSync(contractsDirectory) : []).filter((value) => value.startsWith("warden-hardened-") && value.endsWith(".json"))) {
   const path = resolve(contractsDirectory, name);
@@ -439,4 +443,6 @@ for (const name of (existsSync(contractsDirectory) ? readdirSync(contractsDirect
     results.push({ contractId: record.contractId, state: "failed-safe", error: error instanceof Error ? error.message : String(error) });
   }
 }
-console.log(JSON.stringify({ checkedAt: new Date().toISOString(), results }));
+const report = { schemaVersion: 1, checkedAt, results };
+writeJsonAtomic(supervisorStatusPath, report);
+console.log(JSON.stringify(report));

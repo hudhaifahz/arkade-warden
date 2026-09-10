@@ -131,6 +131,7 @@ const draft = async () => {
     delegatePubkeys: [hex.decode(primaryDelegate.pubkey), hex.decode(backupDelegate.pubkey)],
     delegateApproval: "bounded-renewal-key",
     exitDelaySeconds,
+    finalBuyerUnilateralExit: true,
   });
   const terms: RenewalMandateTerms = {
     version: 1,
@@ -222,7 +223,7 @@ const approve = async () => {
   writeJsonAtomic(mandatePath, mandate, true);
   const record = {
     schemaVersion: 6,
-    scriptVersion: 4,
+    scriptVersion: 5,
     contractId: session.terms.contractId,
     createdAt: session.terms.createdAt,
     label: session.label,

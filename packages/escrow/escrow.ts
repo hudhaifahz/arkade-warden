@@ -147,7 +147,7 @@ type ManagedTimeContractRecord = {
 
 type HardenedTimeContractRecord = {
   schemaVersion: 6;
-  scriptVersion: 4;
+  scriptVersion: 4 | 5;
   exitDelaySeconds: number;
   contractId: string;
   createdAt: string;
@@ -451,7 +451,7 @@ const isMobileContract = (
 
 const isStockCompatibleContract = (record: ContractRecord) =>
   (record.schemaVersion === 4 || record.schemaVersion === 5 || record.schemaVersion === 6) &&
-  (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4) &&
+  (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4 || record.scriptVersion === 5) &&
   Number.isInteger(record.exitDelaySeconds) &&
   record.exitDelaySeconds! >= Number(info.unilateralExitDelay);
 
@@ -460,7 +460,7 @@ const buildContract = (
   refundLocktime: number,
   delegatePubkeyHex?: string,
   exitDelaySeconds?: number,
-  scriptVersion: 2 | 3 | 4 = 2,
+  scriptVersion: 2 | 3 | 4 | 5 = 2,
   renewalPubkeyHexes?: string[],
   delegatePubkeyHexes?: string[],
 ) => {
@@ -475,11 +475,12 @@ const buildContract = (
     renewalPubkeys: renewalPubkeyHexes?.map(hex.decode),
     exitDelaySeconds,
     delegateApproval:
-      scriptVersion === 4
+      scriptVersion === 4 || scriptVersion === 5
         ? "bounded-renewal-key"
         : scriptVersion === 3
           ? "buyer-with-seller-authorization"
           : "buyer-and-seller",
+    finalBuyerUnilateralExit: scriptVersion === 5,
   });
   return {
     collaborativePath: built.collaborativePath,
@@ -507,7 +508,7 @@ const validateContract = (record: ContractRecord) => {
   const delegatePubkeys = record.schemaVersion === 6 ? record.hardenedRenewal.delegatePubkeys : undefined;
   const exitDelaySeconds =
     (record.schemaVersion === 4 || record.schemaVersion === 5 || record.schemaVersion === 6) &&
-    (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4)
+    (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4 || record.scriptVersion === 5)
     ? record.exitDelaySeconds
     : undefined;
   const built = buildContract(

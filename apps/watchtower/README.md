@@ -34,3 +34,8 @@ In heartbeat mode, run `npm run heartbeat` on the private node with
 `ARKADE_URL`, `INGEST_URL`, and the same `INGEST_TOKEN`. Set `ESCROW_ROOT` to
 discover funded contracts automatically, or provide `WATCH_ENTRIES_JSON`.
 Do not put confidential customer or contract metadata in watch labels.
+
+For hardened Warden contracts, the home heartbeat also sends only public,
+opaque status: supervisor freshness/state, bounded-renewal count, signer count,
+delegate availability, and recovery-metadata freshness. The Railway service
+still receives no participant, operator, renewal, or delegate spending key.
