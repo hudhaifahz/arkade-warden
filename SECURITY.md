@@ -1,7 +1,8 @@
 # Security policy
 
 Arkade Warden is experimental mainnet-alpha software. Use disposable amounts,
-review every transaction, and keep a tested unilateral recovery path.
+review every transaction, and keep a tested participant-controlled recovery
+path.
 
 Never report a vulnerability by publishing seeds, signing keys, wallet files,
 macaroons, passwords, authenticated URLs, or funded contract records. Open a

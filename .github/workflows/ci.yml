@@ -20,6 +20,8 @@ jobs:
             command: npm test
           - directory: apps/cloudflare-edge
             command: npm run check
+          - directory: apps/community-edge
+            command: npm run check && npm test
     defaults:
       run:
         working-directory: ${{ matrix.directory }}

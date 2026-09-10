@@ -89,6 +89,11 @@ consumed and each successor has a later Arkade expiry.
 The recovery component validates and preserves the contract, VTXO, tap tree,
 and exit-path metadata. Broadcasting a fully prebuilt exit chain from a
 participant-owned device remains a release gate; a metadata bundle alone must
-not be described as completed recovery proof. Stock version 6 is ready for a
-small funded activation test, but automatic rollover is not proven until stock
-`arkd` consumes that exact predecessor and the indexer exposes the successor.
+not be described as completed recovery proof.
+
+One funded 1,000-sat v6 activation has completed an automatic stock-batch
+rollover: stock `arkd` consumed the predecessor, the indexer exposed a
+later-expiring successor at the exact same value and address, and the journal
+recorded a signed zero-fee receipt. This is activation evidence, not production
+proof. Consecutive renewals, both failover routes, and a participant-device
+recovery drill remain open gates.
