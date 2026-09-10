@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  policy-and-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - directory: packages/escrow
+            command: npm run check && npm test
+          - directory: apps/watchtower
+            command: npm test
+          - directory: apps/cloudflare-edge
+            command: npm run check
+          - directory: apps/community-edge
+            command: npm run check && npm test
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - run: npm ci
+      - run: ${{ matrix.command }}

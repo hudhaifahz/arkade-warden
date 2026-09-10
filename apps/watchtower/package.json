@@ -1,0 +1,19 @@
+{
+  "name": "@frontier-crown/arkade-watchtower",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "heartbeat": "node src/heartbeat.js",
+    "test-alert": "node src/send-test-alert.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@arkade-os/sdk": "0.4.66",
+    "nostr-tools": "2.25.2"
+  }
+}

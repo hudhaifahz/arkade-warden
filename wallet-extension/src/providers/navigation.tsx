@@ -1,0 +1,322 @@
+import { ReactNode, createContext, useCallback, useEffect, useRef, useState } from 'react'
+import Init from '../screens/Init/Init'
+import InitConnect from '../screens/Init/Connect'
+import InitRestore from '../screens/Init/Restore'
+import InitPassword from '../screens/Init/Password'
+import LoadingLogo from '../components/LoadingLogo'
+import NotesRedeem from '../screens/Wallet/Notes/Redeem'
+import NotesForm from '../screens/Wallet/Notes/Form'
+import NotesSuccess from '../screens/Wallet/Notes/Success'
+import ReceiveQRCode from '../screens/Wallet/Receive/QrCode'
+import ReceiveSuccess from '../screens/Wallet/Receive/Success'
+import SendForm from '../screens/Wallet/Send/Form'
+import SendDetails from '../screens/Wallet/Send/Details'
+import SendSuccess from '../screens/Wallet/Send/Success'
+import Transaction from '../screens/Wallet/Transaction'
+import Unlock from '../screens/Wallet/Unlock'
+import Activity from '../screens/Wallet/Activity'
+import Vtxos from '../screens/Settings/Vtxos'
+import Wallet from '../screens/Wallet/Index'
+import BitcoinDetail from '../screens/Wallet/BitcoinDetail'
+import AccountDetail from '../screens/Wallet/AccountDetail'
+import WalletSwap from '../screens/Wallet/Swap/Index'
+import Settings from '../screens/Settings/Index'
+
+import InitSuccess from '../screens/Init/Success'
+import AppLendasat from '../screens/Apps/Lendasat/Index'
+import AppSatora from '../screens/Apps/Satora/Index'
+import AppAssets from '../screens/Apps/Assets/Index'
+import AppAssetDetail from '../screens/Apps/Assets/Detail'
+import AppAssetImport from '../screens/Apps/Assets/Import'
+import AppAssetMint from '../screens/Apps/Assets/Mint'
+import AppAssetMintSuccess from '../screens/Apps/Assets/MintSuccess'
+import AppAssetReissue from '../screens/Apps/Assets/Reissue'
+import AppAssetBurn from '../screens/Apps/Assets/Burn'
+import AppAssetsSettings from '../screens/Apps/Assets/Settings'
+import AppDfx from '../screens/Apps/Dfx/Index'
+import InAppBrowser from '../screens/Wallet/InAppBrowser'
+import Unavailable from '../screens/Wallet/Unavailable'
+import Warden from '../screens/Wallet/Warden'
+
+export type NavigationDirection = 'forward' | 'back' | 'none'
+
+export enum Pages {
+  Activity,
+  AccountDetail,
+  BitcoinDetail,
+  AppLendasat,
+  AppSatora,
+  AppAssets,
+  AppAssetDetail,
+  AppAssetImport,
+  AppAssetMint,
+  AppAssetMintSuccess,
+  AppAssetReissue,
+  AppAssetBurn,
+  AppAssetsSettings,
+  AppDfx,
+  Init,
+  InitRestore,
+  InitPassword,
+  InitConnect,
+  InAppBrowser,
+  InitSuccess,
+  Loading,
+  NotesRedeem,
+  NotesForm,
+  NotesSuccess,
+  ReceiveQRCode,
+  ReceiveSuccess,
+  SendForm,
+  SendDetails,
+  SendSuccess,
+  Settings,
+  Transaction,
+  Unavailable,
+  Unlock,
+  Vtxos,
+  Wallet,
+  WalletSwap,
+  Warden,
+}
+
+// Root pages - switches between these get no animation
+const ROOT_PAGES = new Set([Pages.Wallet])
+
+// Coordination point for sub-navigation (e.g., Settings options)
+// Sub-navigation providers register here so the main popstate handler can delegate
+// Shared flag: set by goBack() before calling history.back(), read by popstate handler
+// Lets us distinguish back-button presses (animate) from swipe gestures (no animation)
+export const isButtonBack = { current: false }
+
+// Coordination point for sub-navigation (e.g., Settings options)
+export const subNavHandler = {
+  canGoBack: () => false as boolean,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  goBack: (_fromButton: boolean) => {},
+  getDepth: () => 0,
+  reset: () => {},
+}
+
+export const pageComponent = (page: Pages): JSX.Element => {
+  switch (page) {
+    case Pages.Activity:
+      return <Activity />
+    case Pages.AccountDetail:
+      return <AccountDetail />
+    case Pages.BitcoinDetail:
+      return <BitcoinDetail />
+    case Pages.AppLendasat:
+      return <AppLendasat />
+    case Pages.AppSatora:
+      return <AppSatora />
+    case Pages.AppAssets:
+      return <AppAssets />
+    case Pages.AppAssetDetail:
+      return <AppAssetDetail />
+    case Pages.AppAssetImport:
+      return <AppAssetImport />
+    case Pages.AppAssetMint:
+      return <AppAssetMint />
+    case Pages.AppAssetMintSuccess:
+      return <AppAssetMintSuccess />
+    case Pages.AppAssetReissue:
+      return <AppAssetReissue />
+    case Pages.AppAssetBurn:
+      return <AppAssetBurn />
+    case Pages.AppAssetsSettings:
+      return <AppAssetsSettings />
+    case Pages.AppDfx:
+      return <AppDfx />
+    case Pages.Init:
+      return <Init />
+    case Pages.InitConnect:
+      return <InitConnect />
+    case Pages.InitRestore:
+      return <InitRestore />
+    case Pages.InitPassword:
+      return <InitPassword />
+    case Pages.InAppBrowser:
+      return <InAppBrowser />
+    case Pages.InitSuccess:
+      return <InitSuccess />
+    case Pages.Loading:
+      return <LoadingLogo />
+    case Pages.NotesRedeem:
+      return <NotesRedeem />
+    case Pages.NotesForm:
+      return <NotesForm />
+    case Pages.NotesSuccess:
+      return <NotesSuccess />
+    case Pages.ReceiveQRCode:
+      return <ReceiveQRCode />
+    case Pages.ReceiveSuccess:
+      return <ReceiveSuccess />
+    case Pages.SendForm:
+      return <SendForm />
+    case Pages.SendDetails:
+      return <SendDetails />
+    case Pages.SendSuccess:
+      return <SendSuccess />
+    case Pages.Settings:
+      return <Settings />
+    case Pages.Transaction:
+      return <Transaction />
+    case Pages.Unavailable:
+      return <Unavailable />
+    case Pages.Unlock:
+      return <Unlock />
+    case Pages.Vtxos:
+      return <Vtxos />
+    case Pages.Wallet:
+      return <Wallet />
+    case Pages.WalletSwap:
+      return <WalletSwap />
+    case Pages.Warden:
+      return <Warden />
+    default:
+      return <></>
+  }
+}
+
+interface NavigationContextProps {
+  direction: NavigationDirection
+  goBack: () => void
+  isInitialLoad: boolean
+  navigate: (arg0: Pages) => void
+  replace: (page: Pages, backTo?: Pages | Pages[]) => void
+  screen: Pages
+}
+
+export const NavigationContext = createContext<NavigationContextProps>({
+  direction: 'none',
+  goBack: () => {},
+  isInitialLoad: false,
+  navigate: () => {},
+  replace: () => {},
+  screen: Pages.Init,
+})
+
+export const NavigationProvider = ({ children }: { children: ReactNode }) => {
+  const [screen, setScreen] = useState(Pages.Init)
+  const [direction, setDirection] = useState<NavigationDirection>('none')
+
+  const screenRef = useRef(Pages.Init)
+  const backStack = useRef<Pages[]>([])
+  const previousPage = useRef<Pages>(Pages.Init)
+  const skipNextPopstate = useRef(false)
+
+  const isInitialLoad = screen === Pages.Wallet
+
+  const handlePopState = useCallback(() => {
+    const fromButton = isButtonBack.current
+    isButtonBack.current = false
+
+    if (skipNextPopstate.current) {
+      skipNextPopstate.current = false
+      return
+    }
+
+    // delegate to sub-navigation (e.g., Settings options) if it can handle this
+    if ([Pages.Settings].includes(screenRef.current) && subNavHandler.canGoBack()) {
+      subNavHandler.goBack(fromButton)
+      return
+    }
+
+    const stack = backStack.current
+    if (stack.length === 0) return
+
+    const prevPage = stack[stack.length - 1]
+
+    // prevent going back to InitConnect or to a loading screen
+    if ([Pages.InitConnect, Pages.Loading].includes(prevPage)) {
+      stack.pop()
+      history.pushState({}, '', '')
+      return
+    }
+
+    stack.pop()
+    previousPage.current = screenRef.current
+    setDirection(fromButton ? 'back' : 'none')
+    screenRef.current = prevPage
+    setScreen(prevPage)
+  }, [])
+
+  useEffect(() => {
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [handlePopState])
+
+  const goBack = useCallback(() => {
+    if (backStack.current.length > 0 || subNavHandler.canGoBack()) {
+      isButtonBack.current = true
+      history.back()
+    }
+  }, [])
+
+  const navigate = useCallback((page: Pages) => {
+    if (page === screenRef.current && backStack.current.length === 0 && subNavHandler.getDepth() === 0) return
+
+    const isRootNavigation = ROOT_PAGES.has(page)
+
+    previousPage.current = screenRef.current
+
+    if (isRootNavigation) {
+      // tab switch or return to root: clear back stack + sub-nav + remove browser history entries
+      const mainEntries = backStack.current.length
+      const subEntries = subNavHandler.getDepth()
+      const entriesToRemove = mainEntries + subEntries
+      backStack.current = []
+      if (subEntries > 0) subNavHandler.reset()
+      if (entriesToRemove > 0) {
+        skipNextPopstate.current = true
+        history.go(-entriesToRemove)
+      }
+      const isFromRoot = ROOT_PAGES.has(screenRef.current)
+      setDirection(isFromRoot ? 'none' : 'back')
+    } else {
+      // forward navigation: push to back stack AND browser history
+      backStack.current.push(screenRef.current)
+      history.pushState({}, '', '')
+      setDirection('forward')
+    }
+
+    screenRef.current = page
+    setScreen(page)
+  }, [])
+
+  const replace = useCallback((page: Pages, backTo?: Pages | Pages[]) => {
+    previousPage.current = screenRef.current
+
+    if (backTo !== undefined) {
+      const targets = Array.isArray(backTo) ? backTo : [backTo]
+      const targetIndex = Math.max(...targets.map((target) => backStack.current.lastIndexOf(target)))
+      if (targetIndex >= 0) {
+        backStack.current = backStack.current.slice(0, targetIndex + 1)
+      }
+    }
+
+    screenRef.current = page
+    setDirection('back')
+    setScreen(page)
+  }, [])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+
+    const navWindow = window as typeof window & {
+      __ARKADE_E2E_NAVIGATE__?: (page: keyof typeof Pages) => void
+    }
+    navWindow.__ARKADE_E2E_NAVIGATE__ = (page) => navigate(Pages[page])
+
+    return () => {
+      delete navWindow.__ARKADE_E2E_NAVIGATE__
+    }
+  }, [navigate])
+
+  return (
+    <NavigationContext.Provider value={{ direction, goBack, isInitialLoad, navigate, replace, screen }}>
+      {children}
+    </NavigationContext.Provider>
+  )
+}

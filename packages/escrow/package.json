@@ -1,0 +1,26 @@
+{
+  "name": "frontier-crown-arkade-mainnet-escrow",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "provision": "tsx provision-identities.ts",
+    "escrow": "tsx escrow.ts",
+    "hardened-contract": "tsx hardened-contract.ts",
+    "renewal-supervisor": "tsx renewal-supervisor.ts",
+    "check": "tsc --noEmit",
+    "test": "tsx --test catalog.test.ts"
+  },
+  "dependencies": {
+    "@arkade-os/sdk": "0.4.66",
+    "@noble/curves": "2.0.1",
+    "@scure/base": "2.0.0",
+    "@scure/btc-signer": "2.0.1",
+    "@scure/bip39": "2.0.1",
+    "eventsource": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}

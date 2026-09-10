@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Arkade Owner Console</title>
+  <style>
+    :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#080b0f;color:#f4f7fb;font:15px/1.45 system-ui,-apple-system,sans-serif}.wrap{max-width:760px;margin:auto;padding:calc(18px + env(safe-area-inset-top)) 18px calc(28px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:20px}h1{font-size:25px;margin:0}.tag{font-size:12px;color:#67e8a5;background:#0d2a20;border:1px solid #1b5942;border-radius:999px;padding:6px 10px}.grid{display:grid;gap:14px}.card{background:#111821;border:1px solid #273241;border-radius:18px;padding:18px}h2{font-size:15px;color:#aebbc9;margin:0 0 13px;text-transform:uppercase;letter-spacing:.07em}.value{font-size:22px;font-weight:760}.row{display:flex;justify-content:space-between;gap:18px;padding:8px 0;border-bottom:1px solid #222d39}.row:last-child{border:0}.label{color:#9aa8b7}.mono{font:12px/1.45 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}button,a.button{appearance:none;text-decoration:none;text-align:center;border:1px solid #344252;background:#182230;color:#fff;padding:12px;border-radius:12px;font-weight:700}.primary{background:#f59e0b!important;color:#17100a!important;border-color:#f59e0b!important}.warning{color:#fbbf24;font-size:13px}.error{color:#fca5a5}footer{color:#748294;font-size:12px;margin-top:18px}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header><div><h1>Arkade owner console</h1><div style="color:#8795a5">Mainnet alpha</div></div><span class="tag" id="health">Checking</span></header>
+    <section class="grid" id="content"><div class="card">Loading local operator and escrow state…</div></section>
+    <footer>No seed, signer key, admin endpoint, or arbitrary withdrawal function is exposed. Warden fund movements require explicit approval. Funded rollovers never run automatically.</footer>
+  </main>
+  <script>
+    const sats=(btc)=>Math.round(Number(btc)*1e8).toLocaleString();
+    const esc=(s)=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    async function copy(v){await navigator.clipboard.writeText(v)}
+    async function load(){
+      try{
+        const r=await fetch('/owner/api/status');
+        if(r.status===401){location.href='/login';return}
+        const d=await r.json();
+        if(!r.ok)throw new Error(d.error||'Unavailable');
+        health.textContent='Online';
+        const escrowValue=d.escrow.spendableVtxos.length?d.escrow.spendableVtxos.reduce((n,v)=>n+Number(v.value),0).toLocaleString():'0';
+        const refundSummary=d.escrow.refundLockType==='time'?new Date(d.escrow.refundAt).toLocaleString():`${d.escrow.remainingBlocks} blocks (height ${d.escrow.refundBlockHeight})`;
+        content.innerHTML=`
+          <article class="card"><h2>Escrow</h2><div class="value">${d.escrow.expired?'Refund unlocked':'Ready'}</div><div class="row"><span class="label">Refund timing</span><strong>${esc(refundSummary)}</strong></div><div class="row"><span class="label">Spendable escrow</span><strong>${escrowValue} sats</strong></div><div class="row"><span class="label">Rollover</span><strong>${esc(d.escrow.rollover?.state||'legacy contract')}</strong></div><div class="row"><span class="label">Buyer control</span><strong>${esc(d.escrow.buyerControl)}</strong></div><div class="row"><span class="label">Contract</span><span class="mono">${esc(d.escrow.contractId)}</span></div><div class="row"><span class="label">Address</span><span class="mono">${esc(d.escrow.escrowAddress)}</span></div><div class="actions"><button id="copyEscrow">Copy escrow address</button><button id="refresh">Refresh</button></div><p class="warning">Bind and sign from the Warden screen inside the mobile wallet. The seed never leaves that device.</p></article>
+          <article class="card"><h2>Operator wallet</h2><div class="value">${sats(d.operator.balance.mainAccount.available)} sats available</div><div class="row"><span class="label">Locked</span><strong>${sats(d.operator.balance.mainAccount.locked)} sats</strong></div><div class="row"><span class="label">Synced</span><strong>${d.operator.status.synced?'Yes':'No'}</strong></div><div class="row"><span class="label">Funding address</span><span class="mono">${esc(d.operator.address)}</span></div><div class="actions"><button id="copyFunding">Copy funding address</button><a class="button primary" href="/">Open mobile wallet</a></div></article>`;
+        document.querySelector('#copyEscrow').onclick=()=>copy(d.escrow.escrowAddress);
+        document.querySelector('#copyFunding').onclick=()=>copy(d.operator.address);
+        document.querySelector('#refresh').onclick=load;
+      }catch(e){health.textContent='Offline';content.innerHTML='<div class="card error">'+esc(e.message)+'</div>'}
+    }
+    load();setInterval(load,30000);
+  </script>
+</body>
+</html>
