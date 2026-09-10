@@ -102,6 +102,7 @@ export const buildWardenScript = (params: WardenScriptParams) => {
     renewalIntentPaths,
     exitPaths,
     finalBuyerExitPath,
+    leaves,
     script: new VtxoScript(leaves),
   };
 };

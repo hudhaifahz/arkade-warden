@@ -33,10 +33,11 @@ import { base64, hex } from "@scure/base";
 import { EventSource } from "eventsource";
 import { exactTapscriptSighash } from "./signing.js";
 import { buildWardenScript } from "./warden-script.js";
+import { assertStockArkdWardenScript } from "./stock-arkd-closures.js";
 
 type MobileTimeContractRecord = {
   schemaVersion: 4 | 5 | 6;
-  scriptVersion?: 2 | 3 | 4 | 5;
+  scriptVersion?: 2 | 3 | 4 | 5 | 6;
   exitDelaySeconds?: number;
   contractId: string;
   serviceUrl: string;
@@ -144,11 +145,11 @@ const scriptFor = (params: WardenParams) => {
     delegatePubkeys: params.delegatePubkeys?.split(",").filter(Boolean).map(hex.decode),
     renewalPubkeys: params.renewalPubkeys?.split(",").filter(Boolean).map(hex.decode),
     exitDelaySeconds:
-      params.scriptVersion === "2" || params.scriptVersion === "3" || params.scriptVersion === "4" || params.scriptVersion === "5"
+      params.scriptVersion === "2" || params.scriptVersion === "3" || params.scriptVersion === "4" || params.scriptVersion === "5" || params.scriptVersion === "6"
         ? Number(params.exitDelaySeconds)
         : undefined,
     delegateApproval:
-      params.scriptVersion === "4" || params.scriptVersion === "5"
+      params.scriptVersion === "4" || params.scriptVersion === "5" || params.scriptVersion === "6"
         ? "bounded-renewal-key"
         : params.scriptVersion === "3"
           ? "buyer-with-seller-authorization"
@@ -348,7 +349,7 @@ const run = async () => {
     throw new Error("Recovery requires reviewed stock arkd v0.9.16");
   }
   if (
-    (record.scriptVersion !== 2 && record.scriptVersion !== 3 && record.scriptVersion !== 4 && record.scriptVersion !== 5) ||
+    (record.scriptVersion !== 2 && record.scriptVersion !== 3 && record.scriptVersion !== 4 && record.scriptVersion !== 5 && record.scriptVersion !== 6) ||
     record.exitDelaySeconds !== Number(info.unilateralExitDelay)
   ) {
     throw new Error("Recovery requires a stock-compatible Warden VTXO with the current exit delay");
@@ -374,6 +375,19 @@ const run = async () => {
     exitDelaySeconds: String(record.exitDelaySeconds),
   };
   const built = scriptFor(params);
+  if (record.scriptVersion === 6) {
+    assertStockArkdWardenScript(buildWardenScript({
+      buyerPubkey: hex.decode(record.buyerPubkey),
+      sellerPubkey: hex.decode(record.sellerPubkey),
+      arbiterPubkey: hex.decode(record.arbiterPubkey),
+      serverPubkey,
+      refundAt: record.refundAt,
+      delegatePubkeys: record.hardenedRenewal?.delegatePubkeys.map(hex.decode),
+      renewalPubkeys: record.hardenedRenewal?.renewalPubkeys.map(hex.decode),
+      delegateApproval: "bounded-renewal-key",
+      exitDelaySeconds: Number(record.exitDelaySeconds),
+    }), { serverPubkey, minimumExitDelaySeconds: Number(info.unilateralExitDelay) });
+  }
   const derivedAddress = built.script.address(networks.bitcoin.hrp, serverPubkey).encode();
   if (derivedAddress !== record.escrowAddress) throw new Error("Recovery contract failed deterministic re-derivation");
   const decodedDestination = ArkAddress.decode(session.destination.address);

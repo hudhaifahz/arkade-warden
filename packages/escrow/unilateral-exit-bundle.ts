@@ -1,7 +1,7 @@
 import type { SignedRenewalMandate } from "./renewal-mandate.js";
 
 export type UnilateralExitBundle = {
-  schemaVersion: 2;
+  schemaVersion: 2 | 3;
   mandateId: string;
   contractId: string;
   arkServerUrl: string;
@@ -16,13 +16,14 @@ export type UnilateralExitBundle = {
     script: string;
   };
   exitPaths: string[];
-  finalBuyerExitPath: string;
+  recoveryModel?: "buyer-only-final" | "operator-independent-two-party-stock-exit";
+  finalBuyerExitPath?: string;
   participantKeys: string[];
   updatedAt: string;
 };
 
 export const assertUnilateralExitBundle = (mandate: SignedRenewalMandate, bundle: UnilateralExitBundle) => {
-  if (bundle.schemaVersion !== 2 || bundle.mandateId !== mandate.mandateId || bundle.contractId !== mandate.terms.contractId) {
+  if ((bundle.schemaVersion !== 2 && bundle.schemaVersion !== 3) || bundle.mandateId !== mandate.mandateId || bundle.contractId !== mandate.terms.contractId) {
     throw new Error("Unilateral-exit bundle is bound to a different mandate");
   }
   if (
@@ -36,11 +37,16 @@ export const assertUnilateralExitBundle = (mandate: SignedRenewalMandate, bundle
     throw new Error("Unilateral-exit bundle VTXO data is incomplete");
   }
   if (bundle.currentVtxo.script !== mandate.terms.escrowScript) throw new Error("Unilateral-exit bundle script changed");
-  if (bundle.exitPaths.length < 4 || bundle.exitPaths.some((path) => !path)) {
+  const expectedExitPaths = bundle.schemaVersion === 2 ? 4 : 3;
+  if (bundle.exitPaths.length < expectedExitPaths || bundle.exitPaths.some((path) => !path)) {
     throw new Error("Unilateral-exit bundle does not preserve all Warden exit paths");
   }
-  if (!bundle.finalBuyerExitPath || !bundle.exitPaths.includes(bundle.finalBuyerExitPath)) {
-    throw new Error("Unilateral-exit bundle is missing the buyer-only final recovery path");
+  if (bundle.schemaVersion === 2) {
+    if (!bundle.finalBuyerExitPath || !bundle.exitPaths.includes(bundle.finalBuyerExitPath)) {
+      throw new Error("Unilateral-exit bundle is missing the buyer-only final recovery path");
+    }
+  } else if (bundle.recoveryModel !== "operator-independent-two-party-stock-exit" || bundle.finalBuyerExitPath) {
+    throw new Error("Stock recovery bundle must use the operator-independent two-party model");
   }
   const allowedParticipants = new Set([
     mandate.terms.buyerPubkey,

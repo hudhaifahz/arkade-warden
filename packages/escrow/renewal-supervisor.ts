@@ -12,7 +12,13 @@ import {
   type VirtualCoin,
 } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
-import { selectRenewalDelegate, selectRenewalSigner } from "./bounded-renewal-signer.js";
+import {
+  classifyRenewalRouteFailure,
+  delegatedAuthorizationExpired,
+  delegatedAuthorizationIsActive,
+  selectRenewalDelegate,
+  selectRenewalSigner,
+} from "./bounded-renewal-signer.js";
 import {
   deriveRenewalHistory,
   renewalReceiptDigest,
@@ -24,10 +30,11 @@ import { renewalDecision } from "./renewal-policy.js";
 import { verifySignedRenewalMandate, type SignedRenewalMandate } from "./renewal-mandate.js";
 import { buildWardenScript } from "./warden-script.js";
 import { assertUnilateralExitBundle, type UnilateralExitBundle } from "./unilateral-exit-bundle.js";
+import { assertStockArkdWardenScript } from "./stock-arkd-closures.js";
 
 type HardenedContract = {
   schemaVersion: 6;
-  scriptVersion: 5;
+  scriptVersion: 5 | 6;
   contractId: string;
   serviceUrl: string;
   network: "bitcoin";
@@ -150,7 +157,7 @@ const priorAuthorization = (contractId: string, input: { txid: string; vout: num
         session.execution === "bounded-renewal-stock-batch" &&
         session.input?.txid === input.txid &&
         session.input?.vout === input.vout &&
-        ["queued", "running", "completed", "awaiting_mobile_signature"].includes(session.stage)
+        delegatedAuthorizationIsActive(session)
       ) return session;
     } catch {
       // A corrupt unrelated session must not suppress renewal of this contract.
@@ -169,12 +176,17 @@ const failedRoutes = (contractId: string, input: { txid: string; vout: number })
       if (
         session.contractId === contractId &&
         session.execution === "bounded-renewal-stock-batch" &&
-        session.stage === "failed" &&
         session.input?.txid === input.txid &&
         session.input?.vout === input.vout
       ) {
-        if (session.renewalSignerPubkey) signers.add(session.renewalSignerPubkey);
-        if (session.delegate?.pubkey) delegates.add(session.delegate.pubkey);
+        if (session.stage === "failed") {
+          const failure = classifyRenewalRouteFailure(session.error);
+          if (failure.signer && session.renewalSignerPubkey) signers.add(session.renewalSignerPubkey);
+          if (failure.delegate && session.delegate?.pubkey) delegates.add(session.delegate.pubkey);
+        }
+        if (delegatedAuthorizationExpired(session) && session.delegate?.pubkey) {
+          delegates.add(session.delegate.pubkey);
+        }
       }
     } catch {
       // Ignore an unrelated unreadable session; live policy checks still fail closed.
@@ -273,6 +285,13 @@ const reconcileJournal = async (
 };
 
 const supervise = async (contractPath: string, contract: HardenedContract) => {
+  if (contract.scriptVersion !== 6) {
+    return {
+      contractId: contract.contractId,
+      state: "manual-recovery-required",
+      reason: "This alpha script is rejected by the stock arkd closure parser",
+    };
+  }
   const mandate = verifySignedRenewalMandate(readJson<SignedRenewalMandate>(contract.hardenedRenewal.mandatePath));
   if (mandate.mandateId !== contract.hardenedRenewal.mandateId) throw new Error("Contract mandate binding changed");
   const arkProvider = new RestArkProvider(contract.serviceUrl);
@@ -291,7 +310,10 @@ const supervise = async (contractPath: string, contract: HardenedContract) => {
     delegatePubkeys: contract.hardenedRenewal.delegatePubkeys.map(hex.decode),
     delegateApproval: "bounded-renewal-key",
     exitDelaySeconds: contract.exitDelaySeconds,
-    finalBuyerUnilateralExit: true,
+  });
+  assertStockArkdWardenScript(built, {
+    serverPubkey,
+    minimumExitDelaySeconds: contract.exitDelaySeconds,
   });
   if (
     built.script.address(networks.bitcoin.hrp, serverPubkey).encode() !== contract.escrowAddress ||
@@ -325,7 +347,7 @@ const supervise = async (contractPath: string, contract: HardenedContract) => {
   const input = spendable.find((coin) => outpoint(coin) === outpoint(history.currentOutpoint));
   if (!input || !input.expiresAt) return { contractId: contract.contractId, state: "awaiting-indexed-successor" };
   const exitBundle: UnilateralExitBundle = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     mandateId: mandate.mandateId,
     contractId: contract.contractId,
     arkServerUrl: contract.serviceUrl,
@@ -340,7 +362,7 @@ const supervise = async (contractPath: string, contract: HardenedContract) => {
       script: contract.escrowScript,
     },
     exitPaths: built.exitPaths.map(hex.encode),
-    finalBuyerExitPath: hex.encode(built.finalBuyerExitPath!),
+    recoveryModel: "operator-independent-two-party-stock-exit",
     participantKeys: [contract.buyerPubkey, contract.sellerPubkey, contract.arbiterPubkey],
     updatedAt: new Date().toISOString(),
   };

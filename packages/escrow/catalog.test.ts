@@ -45,11 +45,15 @@ import {
 } from "./renewal-journal.js";
 import {
   authorizeBoundedRenewal,
+  classifyRenewalRouteFailure,
+  delegatedAuthorizationExpired,
+  delegatedAuthorizationIsActive,
   selectRenewalDelegate,
   selectRenewalSigner,
   type RenewalProposal,
 } from "./bounded-renewal-signer.js";
 import { assertUnilateralExitBundle, type UnilateralExitBundle } from "./unilateral-exit-bundle.js";
+import { assertStockArkdWardenScript } from "./stock-arkd-closures.js";
 
 test("duration catalog contains the nine requested unique presets", () => {
   assert.equal(durationPresets.length, 9);
@@ -377,6 +381,57 @@ test("hardened Warden script carries two signer and two delegate routes plus sto
     [hex.encode(key(6)), hex.encode(key(9)), hex.encode(key(4))],
     [hex.encode(key(7)), hex.encode(key(9)), hex.encode(key(4))],
   ]);
+});
+
+test("stock arkd preflight accepts the hardened closure-only tree", () => {
+  const key = (byte: number) => {
+    const privateKey = new Uint8Array(32);
+    privateKey[31] = byte;
+    return schnorr.getPublicKey(privateKey);
+  };
+  const server = key(4);
+  const built = buildWardenScript({
+    buyerPubkey: key(1),
+    sellerPubkey: key(2),
+    arbiterPubkey: key(3),
+    serverPubkey: server,
+    renewalPubkeys: [key(6), key(7)],
+    delegatePubkeys: [key(8), key(9)],
+    delegateApproval: "bounded-renewal-key",
+    refundAt: 1_800_000_000,
+    exitDelaySeconds: 86_016,
+  });
+  assert.equal(assertStockArkdWardenScript(built, {
+    serverPubkey: server,
+    minimumExitDelaySeconds: 86_016,
+  }), built);
+  assert.equal(built.exitPaths.length, 3);
+  assert.equal(built.finalBuyerExitPath, undefined);
+});
+
+test("stock arkd preflight rejects the old combined time-and-exit leaf", () => {
+  const key = (byte: number) => {
+    const privateKey = new Uint8Array(32);
+    privateKey[31] = byte;
+    return schnorr.getPublicKey(privateKey);
+  };
+  const server = key(4);
+  const built = buildWardenScript({
+    buyerPubkey: key(1),
+    sellerPubkey: key(2),
+    arbiterPubkey: key(3),
+    serverPubkey: server,
+    renewalPubkeys: [key(6), key(7)],
+    delegatePubkeys: [key(8), key(9)],
+    delegateApproval: "bounded-renewal-key",
+    finalBuyerUnilateralExit: true,
+    refundAt: 1_800_000_000,
+    exitDelaySeconds: 86_016,
+  });
+  assert.throws(
+    () => assertStockArkdWardenScript(built, { serverPubkey: server, minimumExitDelaySeconds: 86_016 }),
+    /does not accept/,
+  );
 });
 
 test("seller authorization binds the exact delegated rollover terms", async () => {
@@ -771,6 +826,33 @@ test("hardened redundancy selects recovery signer and backup delegate without ch
   );
 });
 
+test("software validation failures do not consume signer or delegate redundancy", () => {
+  assert.deepEqual(classifyRenewalRouteFailure("Rollover refund deadline changed"), {
+    signer: false,
+    delegate: false,
+  });
+  assert.deepEqual(classifyRenewalRouteFailure("Renewal signer unavailable"), {
+    signer: true,
+    delegate: false,
+  });
+  assert.deepEqual(classifyRenewalRouteFailure("Fulmine delegate unavailable"), {
+    signer: false,
+    delegate: true,
+  });
+});
+
+test("completed delegated authorization stays reserved only until its signed expiry", () => {
+  const now = new Date("2026-09-09T12:00:00Z");
+  const active = { stage: "completed", expiresAt: "2026-09-09T12:01:00Z" };
+  const expired = { stage: "completed", expiresAt: "2026-09-09T12:00:00Z" };
+  assert.equal(delegatedAuthorizationIsActive(active, now), true);
+  assert.equal(delegatedAuthorizationExpired(active, now), false);
+  assert.equal(delegatedAuthorizationIsActive(expired, now), false);
+  assert.equal(delegatedAuthorizationExpired(expired, now), true);
+  assert.equal(delegatedAuthorizationIsActive({ stage: "queued" }, now), true);
+  assert.equal(delegatedAuthorizationExpired({ stage: "failed" }, now), false);
+});
+
 test("operator-outage recovery bundle preserves the current VTXO and all stock exit paths", () => {
   const { mandate } = hardenedMandateFixture();
   const bundle: UnilateralExitBundle = {
@@ -798,5 +880,34 @@ test("operator-outage recovery bundle preserves the current VTXO and all stock e
   assert.throws(
     () => assertUnilateralExitBundle(mandate, { ...bundle, finalBuyerExitPath: "ee" }),
     /buyer-only final recovery path/,
+  );
+});
+
+test("stock recovery bundle requires three operator-independent two-party exits", () => {
+  const { mandate } = hardenedMandateFixture();
+  const bundle: UnilateralExitBundle = {
+    schemaVersion: 3,
+    mandateId: mandate.mandateId,
+    contractId: mandate.terms.contractId,
+    arkServerUrl: mandate.terms.arkServerUrl,
+    arkServerPubkey: mandate.terms.arkServerPubkey,
+    network: "bitcoin",
+    currentVtxo: {
+      txid: "11".repeat(32),
+      vout: 0,
+      value: 1_000,
+      expiresAt: "2026-09-05T00:00:00.000Z",
+      tapTree: "aa",
+      script: mandate.terms.escrowScript,
+    },
+    exitPaths: ["aa", "bb", "cc"],
+    recoveryModel: "operator-independent-two-party-stock-exit",
+    participantKeys: [mandate.terms.buyerPubkey, mandate.terms.sellerPubkey, mandate.terms.arbiterPubkey],
+    updatedAt: "2026-09-03T00:00:00.000Z",
+  };
+  assert.equal(assertUnilateralExitBundle(mandate, bundle), bundle);
+  assert.throws(
+    () => assertUnilateralExitBundle(mandate, { ...bundle, exitPaths: ["aa", "bb"] }),
+    /does not preserve/,
   );
 });

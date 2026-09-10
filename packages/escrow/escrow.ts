@@ -147,7 +147,7 @@ type ManagedTimeContractRecord = {
 
 type HardenedTimeContractRecord = {
   schemaVersion: 6;
-  scriptVersion: 4 | 5;
+  scriptVersion: 4 | 5 | 6;
   exitDelaySeconds: number;
   contractId: string;
   createdAt: string;
@@ -223,6 +223,13 @@ type SigningSession = {
 };
 
 type EscrowAction = "release" | "refund" | "migrate";
+
+const writeJson = (value: unknown) => new Promise<void>((resolveWrite, rejectWrite) => {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`, (error) => {
+    if (error) rejectWrite(error);
+    else resolveWrite();
+  });
+});
 
 type IndexedVtxo = {
   txid: string;
@@ -451,7 +458,8 @@ const isMobileContract = (
 
 const isStockCompatibleContract = (record: ContractRecord) =>
   (record.schemaVersion === 4 || record.schemaVersion === 5 || record.schemaVersion === 6) &&
-  (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4 || record.scriptVersion === 5) &&
+  (record.schemaVersion !== 6 || record.scriptVersion === 6) &&
+  (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4 || record.scriptVersion === 5 || record.scriptVersion === 6) &&
   Number.isInteger(record.exitDelaySeconds) &&
   record.exitDelaySeconds! >= Number(info.unilateralExitDelay);
 
@@ -460,7 +468,7 @@ const buildContract = (
   refundLocktime: number,
   delegatePubkeyHex?: string,
   exitDelaySeconds?: number,
-  scriptVersion: 2 | 3 | 4 | 5 = 2,
+  scriptVersion: 2 | 3 | 4 | 5 | 6 = 2,
   renewalPubkeyHexes?: string[],
   delegatePubkeyHexes?: string[],
 ) => {
@@ -475,7 +483,7 @@ const buildContract = (
     renewalPubkeys: renewalPubkeyHexes?.map(hex.decode),
     exitDelaySeconds,
     delegateApproval:
-      scriptVersion === 4 || scriptVersion === 5
+      scriptVersion === 4 || scriptVersion === 5 || scriptVersion === 6
         ? "bounded-renewal-key"
         : scriptVersion === 3
           ? "buyer-with-seller-authorization"
@@ -508,7 +516,7 @@ const validateContract = (record: ContractRecord) => {
   const delegatePubkeys = record.schemaVersion === 6 ? record.hardenedRenewal.delegatePubkeys : undefined;
   const exitDelaySeconds =
     (record.schemaVersion === 4 || record.schemaVersion === 5 || record.schemaVersion === 6) &&
-    (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4 || record.scriptVersion === 5)
+    (record.scriptVersion === 2 || record.scriptVersion === 3 || record.scriptVersion === 4 || record.scriptVersion === 5 || record.scriptVersion === 6)
     ? record.exitDelaySeconds
     : undefined;
   const built = buildContract(
@@ -1137,7 +1145,21 @@ const statusFor = async (record: ContractRecord, rotated = false, binding = read
       return { supported: false, state: "legacy-contract", execution: "disabled" };
     }
     if (!isStockCompatibleContract(record)) {
-      return { supported: false, state: "stock-script-migration-required", execution: "disabled" };
+      return {
+        supported: false,
+        state: record.schemaVersion === 6 && record.scriptVersion === 5
+          ? "stock-parser-rejected-recovery-required"
+          : "stock-script-migration-required",
+        execution: "disabled",
+      };
+    }
+    if (record.schemaVersion === 6) {
+      return {
+        supported: true,
+        state: vtxos.length === 0 ? "not-funded" : "bounded-mandate-controls-renewal",
+        execution: "bounded-renewal-mandate",
+        automaticExecution: true,
+      };
     }
     if (recoverableVtxos.length > 0) {
       return { supported: true, state: "recover-first", execution: "mutual-stock-batch" };
@@ -1184,16 +1206,23 @@ const statusFor = async (record: ContractRecord, rotated = false, binding = read
     ? await delegatedRolloverPlanFor(record)
     : record.schemaVersion === 6
       ? {
-          supported: true,
-          state: record.hardenedRenewal.state,
-          execution: "bounded-renewal-mandate",
-          automaticExecution: true,
+          supported: isStockCompatibleContract(record),
+          state: !isStockCompatibleContract(record)
+            ? "stock-parser-rejected-recovery-required"
+            : vtxos.length === 0
+              ? "approved-awaiting-funding"
+              : "active-bounded-mandate",
+          execution: isStockCompatibleContract(record) ? "bounded-renewal-mandate" : "disabled",
+          automaticExecution: isStockCompatibleContract(record),
           mandateId: record.hardenedRenewal.mandateId,
           maxRenewals: record.hardenedRenewal.maxRenewals,
           finalAt: record.hardenedRenewal.finalAt,
           signerCount: record.hardenedRenewal.renewalPubkeys.length,
           delegateCount: record.hardenedRenewal.delegatePubkeys.length,
           activationTest: record.hardenedRenewal.activationTest,
+          recoveryModel: record.scriptVersion === 6
+            ? "operator-independent-two-party-stock-exit"
+            : "unsupported-alpha-script",
         }
     : {
         supported: false,
@@ -1781,12 +1810,12 @@ if (command === "init") {
 
 if (command === "ensure-active" || command === "status") {
   const active = await ensureActive();
-  console.log(JSON.stringify(await statusFor(active.record, active.rotated, active.binding), null, 2));
+  await writeJson(await statusFor(active.record, active.rotated, active.binding));
   process.exit(0);
 }
 
 if (command === "dashboard") {
-  console.log(JSON.stringify(await dashboard(), null, 2));
+  await writeJson(await dashboard());
   process.exit(0);
 }
 

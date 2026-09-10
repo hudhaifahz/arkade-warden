@@ -45,10 +45,11 @@ import {
 import { authorizeBoundedRenewal } from "./bounded-renewal-signer.js";
 import { readRenewalJournal } from "./renewal-journal.js";
 import { type SignedRenewalMandate } from "./renewal-mandate.js";
+import { assertStockArkdWardenScript } from "./stock-arkd-closures.js";
 
 type MobileTimeContractRecord = {
   schemaVersion: 4 | 5 | 6;
-  scriptVersion?: 2 | 3 | 4 | 5;
+  scriptVersion?: 2 | 3 | 4 | 5 | 6;
   exitDelaySeconds?: number;
   contractId: string;
   createdAt: string;
@@ -193,11 +194,11 @@ const scriptFor = (params: WardenParams) => {
     delegatePubkeys: params.delegatePubkeys?.split(",").filter(Boolean).map(hex.decode),
     renewalPubkeys: params.renewalPubkeys?.split(",").filter(Boolean).map(hex.decode),
     exitDelaySeconds:
-      params.scriptVersion === "2" || params.scriptVersion === "3" || params.scriptVersion === "4" || params.scriptVersion === "5"
+      params.scriptVersion === "2" || params.scriptVersion === "3" || params.scriptVersion === "4" || params.scriptVersion === "5" || params.scriptVersion === "6"
         ? Number(params.exitDelaySeconds)
         : undefined,
     delegateApproval:
-      params.scriptVersion === "4" || params.scriptVersion === "5"
+      params.scriptVersion === "4" || params.scriptVersion === "5" || params.scriptVersion === "6"
         ? "bounded-renewal-key"
         : params.scriptVersion === "3"
           ? "buyer-with-seller-authorization"
@@ -457,7 +458,8 @@ const run = async () => {
   }
   if (record.serviceUrl !== serviceUrl || record.network !== "bitcoin") throw new Error("Rollover network mismatch");
   if (record.escrowAddress !== session.successor.address) throw new Error("Rollover destination changed");
-  if (new Date(record.refundAt * 1_000).toISOString() !== session.successor.refundAt) {
+  const successorRefundAt = Date.parse(session.successor.refundAt);
+  if (!Number.isFinite(successorRefundAt) || record.refundAt !== Math.floor(successorRefundAt / 1_000)) {
     throw new Error("Rollover refund deadline changed");
   }
   if (record.refundAt <= Math.floor(Date.now() / 1_000)) throw new Error("Refund is already unlocked; do not rollover");
@@ -466,7 +468,7 @@ const run = async () => {
   const info = await arkProvider.getInfo();
   if (info.version !== "v0.9.16" || info.network !== "bitcoin") throw new Error("Rollover requires reviewed stock arkd v0.9.16");
   if (
-    (record.scriptVersion !== 2 && record.scriptVersion !== 3 && record.scriptVersion !== 4 && record.scriptVersion !== 5) ||
+    (record.scriptVersion !== 2 && record.scriptVersion !== 3 && record.scriptVersion !== 4 && record.scriptVersion !== 5 && record.scriptVersion !== 6) ||
     record.exitDelaySeconds !== Number(info.unilateralExitDelay)
   ) {
     throw new Error("Rollover requires a stock-compatible Warden VTXO with the current exit delay");
@@ -506,6 +508,19 @@ const run = async () => {
     exitDelaySeconds: String(record.exitDelaySeconds),
   };
   const built = scriptFor(params);
+  if (record.scriptVersion === 6) {
+    assertStockArkdWardenScript(buildWardenScript({
+      buyerPubkey: hex.decode(record.buyerPubkey),
+      sellerPubkey: hex.decode(record.sellerPubkey),
+      arbiterPubkey: hex.decode(record.arbiterPubkey),
+      serverPubkey,
+      refundAt: record.refundAt,
+      delegatePubkeys: record.hardenedRenewal?.delegatePubkeys.map(hex.decode),
+      renewalPubkeys: record.hardenedRenewal?.renewalPubkeys.map(hex.decode),
+      delegateApproval: "bounded-renewal-key",
+      exitDelaySeconds: Number(record.exitDelaySeconds),
+    }), { serverPubkey, minimumExitDelaySeconds: Number(info.unilateralExitDelay) });
+  }
   const derivedAddress = built.script.address(networks.bitcoin.hrp, serverPubkey).encode();
   if (derivedAddress !== record.escrowAddress) throw new Error("Rollover contract failed deterministic re-derivation");
 
@@ -514,7 +529,7 @@ const run = async () => {
   if (delegated && record.scriptVersion !== 3) {
     throw new Error("Delegated rollover requires the Fulmine-compatible Warden script");
   }
-  if (bounded && record.scriptVersion !== 5) throw new Error("Bounded renewal requires Warden script version 5");
+  if (bounded && record.scriptVersion !== 6) throw new Error("Bounded renewal requires the stock-closure Warden script");
   const identity: Identity = renewalIdentity ?? new MutualRemoteIdentity(
       hex.decode(record.buyerPubkey),
       seller,

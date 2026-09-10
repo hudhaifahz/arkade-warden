@@ -14,6 +14,7 @@ import {
   type SignedRenewalMandate,
 } from "./renewal-mandate.js";
 import { buildWardenScript } from "./warden-script.js";
+import { assertStockArkdWardenScript } from "./stock-arkd-closures.js";
 
 type BuyerBinding = {
   schemaVersion: 1;
@@ -131,8 +132,8 @@ const draft = async () => {
     delegatePubkeys: [hex.decode(primaryDelegate.pubkey), hex.decode(backupDelegate.pubkey)],
     delegateApproval: "bounded-renewal-key",
     exitDelaySeconds,
-    finalBuyerUnilateralExit: true,
   });
+  assertStockArkdWardenScript(built, { serverPubkey, minimumExitDelaySeconds: exitDelaySeconds });
   const terms: RenewalMandateTerms = {
     version: 1,
     purpose: "frontier-crown-warden-bounded-renewal",
@@ -197,6 +198,7 @@ const draft = async () => {
       maxTotalFeeSats: terms.maxTotalFeeSats,
       signerCount: terms.renewalSigners.length,
       delegateCount: terms.delegates.length,
+      recoveryModel: "operator-independent-two-party-stock-exit",
       escrowAddress: terms.escrowAddress,
     },
   };
@@ -223,7 +225,7 @@ const approve = async () => {
   writeJsonAtomic(mandatePath, mandate, true);
   const record = {
     schemaVersion: 6,
-    scriptVersion: 5,
+    scriptVersion: 6,
     contractId: session.terms.contractId,
     createdAt: session.terms.createdAt,
     label: session.label,

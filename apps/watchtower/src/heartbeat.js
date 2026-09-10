@@ -51,7 +51,7 @@ const loadCatalogEntries = () => {
           contractId: opaqueId,
           address: record.escrowAddress,
           finalAt: new Date(record.refundAt * 1_000).toISOString(),
-          expectedValueSats: Number.isSafeInteger(record.expectedValueSats) ? record.expectedValueSats : undefined,
+          expectedValueSats: Number.isSafeInteger(record.expectedAmountSats) ? record.expectedAmountSats : undefined,
           renewal: record.schemaVersion === 6 && opaqueMandateId ? {
             mandateId: opaqueMandateId,
             supervisorCheckedAt: supervisor?.checkedAt,

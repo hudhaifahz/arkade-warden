@@ -78,9 +78,11 @@ have all been reviewed.
 `refund` is blocked both by the contract timelock and by a separate
 `CONFIRM_ESCROW_REFUND` value matching the contract ID.
 
-The experimental script-version-4 path adds a buyer-and-seller signed bounded
+The experimental stock-closure path adds a buyer-and-seller signed bounded
 renewal mandate, independent primary/recovery renewal keys, independent
-primary/backup Fulmine delegates, signed journal reconstruction, and automatic
-stock-intent creation for each newly indexed VTXO. See
+primary/backup Fulmine delegates, signed journal reconstruction, automatic
+stock-intent creation for each newly indexed VTXO, and three
+operator-independent two-party recovery exits. It does not claim a
+single-participant unilateral escape. See
 [`docs/HARDENED_RENEWALS.md`](../../docs/HARDENED_RENEWALS.md) for the threat
 model, fail-closed behavior, and remaining mainnet-alpha release gates.

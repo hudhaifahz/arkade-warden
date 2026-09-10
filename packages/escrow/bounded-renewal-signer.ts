@@ -122,3 +122,35 @@ export const selectRenewalDelegate = (
 ) => [...mandate.terms.delegates]
   .sort((a, b) => a.priority - b.priority)
   .find(({ pubkey }) => availability[pubkey]);
+
+export const classifyRenewalRouteFailure = (error: unknown) => {
+  const message = String(error instanceof Error ? error.message : error).toLowerCase();
+  return {
+    signer: /renewal signer|renewal signature|signing key|keychain/.test(message),
+    delegate: /delegate|delegation|fulmine/.test(message),
+  };
+};
+
+type DelegatedAuthorizationSession = {
+  stage?: string;
+  expiresAt?: string;
+};
+
+export const delegatedAuthorizationIsActive = (
+  session: DelegatedAuthorizationSession,
+  now = new Date(),
+) => {
+  if (["queued", "running", "awaiting_mobile_signature"].includes(session.stage ?? "")) return true;
+  if (session.stage !== "completed") return false;
+  const expiresAt = Date.parse(session.expiresAt ?? "");
+  return Number.isFinite(expiresAt) && expiresAt > now.getTime();
+};
+
+export const delegatedAuthorizationExpired = (
+  session: DelegatedAuthorizationSession,
+  now = new Date(),
+) => {
+  if (session.stage !== "completed") return false;
+  const expiresAt = Date.parse(session.expiresAt ?? "");
+  return !Number.isFinite(expiresAt) || expiresAt <= now.getTime();
+};

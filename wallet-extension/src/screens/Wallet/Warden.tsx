@@ -99,7 +99,7 @@ type RecoverySession = {
   sessionId: string
   contractId: string
   stage: 'queued' | 'running' | 'awaiting_mobile_signature' | 'completed' | 'failed'
-  execution: 'mutual-preserve-escrow' | 'buyer-refund-after-expiry'
+  execution: 'mutual-preserve-escrow' | 'buyer-refund-after-expiry' | 'bounded-renewal-stock-batch'
   input: EscrowVtxo
   destination: { address: string; script: string; value: number }
   quotedFeeSats: number
@@ -122,6 +122,7 @@ type HardenedMandateDraft = {
     maxTotalFeeSats: number
     signerCount: number
     delegateCount: number
+    recoveryModel: 'operator-independent-two-party-stock-exit'
     escrowAddress: string
   }
 }
@@ -229,6 +230,8 @@ const rolloverText = (state: string) => {
   if (state === 'available-for-activation-test')
     return 'Rollover is not required for safety, but this tiny funded escrow can prove the stock-batch path.'
   if (state === 'recover-first') return 'This VTXO must be recovered before any rollover.'
+  if (state === 'bounded-mandate-controls-renewal')
+    return 'Automatic stock-batch renewal is controlled by the jointly approved bounded mandate.'
   return ''
 }
 
@@ -456,7 +459,7 @@ export default function Warden() {
       const days = Math.round(draft.summary.durationSeconds / 86_400)
       if (
         !window.confirm(
-          `Authorize this bounded renewal mandate?\n\nNetwork: Bitcoin mainnet alpha\nEscrow: 1,000 sats for ${days} days\nFinal date: ${new Date(draft.summary.finalAt).toLocaleString()}\nMaximum renewals: ${draft.summary.maxRenewals}\nMaximum fee each: ${draft.summary.maxFeePerRolloverSats} sats\nMaximum fees total: ${draft.summary.maxTotalFeeSats} sats\nIndependent renewal signers: ${draft.summary.signerCount}\nIndependent delegates: ${draft.summary.delegateCount}\n\nEvery renewal must keep the same address, script, parties, value except the capped fee, and final date. This approval expires in 30 minutes.`,
+          `Authorize this bounded renewal mandate?\n\nNetwork: Bitcoin mainnet alpha\nEscrow: 1,000 sats for ${days} days\nFinal date: ${new Date(draft.summary.finalAt).toLocaleString()}\nMaximum renewals: ${draft.summary.maxRenewals}\nMaximum fee each: ${draft.summary.maxFeePerRolloverSats} sats\nMaximum fees total: ${draft.summary.maxTotalFeeSats} sats\nIndependent renewal signers: ${draft.summary.signerCount}\nIndependent delegates: ${draft.summary.delegateCount}\nRecovery: any approved two of buyer, seller, and arbiter can exit without the operator after Arkade's delay\n\nEvery renewal must keep the same address, script, parties, value except the capped fee, and final date. This approval expires in 30 minutes.`,
         )
       ) {
         setResult('Hardened mandate draft was not signed. No escrow was activated and no sats moved.')
@@ -853,7 +856,8 @@ export default function Warden() {
                 <TextSecondary>
                   Creates one isolated 10-day, 1,000-sat mainnet-alpha escrow. One buyer approval fixes the final date,
                   address, parties, renewal count, and fee ceilings. Two signer paths and two delegate paths are included,
-                  alongside the three stock unilateral-exit paths. Creating it does not move sats.
+                  alongside three stock-compatible, operator-independent two-party exit paths. No single party can use
+                  those exits to bypass the escrow. Creating it does not move sats.
                 </TextSecondary>
                 <Button
                   label='Create hardened 10-day alpha escrow'
@@ -998,8 +1002,8 @@ export default function Warden() {
                       ) : null}
                       {!contract.stockCompatible && escrowValue > 0 ? (
                         <div style={dangerStyle}>
-                          This early experimental escrow is missing stock arkd’s required exit closure. Do not rollover it
-                          directly; migrate it first without changing its parties, value, or refund deadline.
+                          This early experimental escrow is rejected by stock arkd’s closure parser. Do not fund it again.
+                          Recover its existing VTXO, then use a new stock-closure hardened escrow.
                         </div>
                       ) : null}
                       {contract.automaticRollover.state === 'fulmine-script-migration-required' && escrowValue > 0 ? (
